@@ -1,0 +1,20 @@
+
+This repository contains OpenSCAD files
+
+dueling-masters-of-space-time-game-pieces.scad
+gamepiecebox.scad
+
+and graphics files for 3-d printing game pieces and
+regular old printing of a game board for the board
+game "Dueling Masters of Space Time" which my Dad,
+my brother, and I invented back in 1980.
+
+To see what this is all about:
+
+mkdir /somedir
+cd /somedir
+git clone this repository
+point your browser at file://somedir/dueling-masters-of-space-time.html
+
+-- steve
+ 
