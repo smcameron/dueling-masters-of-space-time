@@ -17,4 +17,55 @@ git clone this repository
 point your browser at file://somedir/dueling-masters-of-space-time.html
 
 -- steve
- 
+
+
+Inventory of important files:
+
+OpenSCAD files for game pieces and box to hold game pieces: 
+dueling-masters-of-space-time-game-pieces.scad
+gamepiecebox.scad
+
+Full size 72-dpi game boards with space imagery
+(These use lots of ink and need a big printer):
+
+dueling-masters-of-space-time-board1.JPG
+dueling-masters-of-space-time-board2.JPG
+
+72-dpi game board quadrants with space imagery
+(These use lots of ink but should print ok on a
+normal piece of 8.5x11in piece of paper)
+
+dueling-masters-of-space-time-gameboard-1.jpg
+dueling-masters-of-space-time-gameboard-1-lowerleft.jpg
+dueling-masters-of-space-time-gameboard-1-lowerright.jpg
+dueling-masters-of-space-time-gameboard-1-upperleft.jpg
+dueling-masters-of-space-time-gameboard-1-upperright.jpg
+dueling-masters-of-space-time-gameboard-2.jpg
+dueling-masters-of-space-time-gameboard-2-lowerleft.jpg
+dueling-masters-of-space-time-gameboard-2-lowerright.jpg
+dueling-masters-of-space-time-gameboard-2-upperleft.jpg
+dueling-masters-of-space-time-gameboard-2-upperright.jpg
+
+xcf versions of the gameboard artwork for editing in the Gimp.
+dueling-masters-of-space-time-gameboard-1.xcf
+dueling-masters-of-space-time-gameboard-2.xcf
+
+Ink conserving full sized versions of the game board
+(need a big printer):
+mostly-white-gameboard-1.jpg
+mostly-white-gameboard-2.jpg
+
+Ink conserving versions of the game board quadrants
+for printing on 8.5x11 inch paper.  (Print the lowerright
+and upperright files 2x.)
+mostly-white-gameboard-1-lowerleft.jpg
+mostly-white-gameboard-1-lowerright.jpg
+mostly-white-gameboard-1-upperleft.jpg
+mostly-white-gameboard-1-upperright.jpg
+mostly-white-gameboard-2-lowerleft.jpg
+mostly-white-gameboard-2-upperleft.jpg
+
+Xcf version of the ink conserving gameboards (for editing with the Gimp).
+mostly-white-gameboard-1.xcf
+mostly-white-gameboard-2.xcf
+
