@@ -7,6 +7,7 @@ struct gui {
 	GtkWidget *window;
 	GtkWidget *drawing_area;
 	int xdim, ydim;
+	int inverted;
 };
 
 static GdkColor black;
@@ -93,10 +94,15 @@ static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 	cr = gdk_cairo_create(w->window);
 
 	cairo_save(cr);
+	if (ui->inverted) {
+		cairo_scale(cr, 1.0, -1.0);
+		cairo_translate(cr, 0.0, -ui->ydim);
+	}
 	cairo_scale (cr, (double) ui->xdim / (double) xd, (double) ui->ydim / (double) yd);
 
+
 	cairo_set_source_surface (cr, galaxy_image, 0, 0);
-	cairo_paint(cr);
+	cairo_paint_with_alpha(cr, 0.7);
 	cairo_restore(cr);
 
 	cairo_set_dash(cr, dash, 2, 2.0);
@@ -110,8 +116,12 @@ static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 	}
 	for (i = 0; i < 10; i++) {
 		char letter[2];
+		double y;
 		sprintf(letter, "%c", 'A' + i);
-		draw_centered_text(cr, ui->xdim / 24.0, (i + 1.5) * ui->ydim / 12.0, 30.0, letter);
+		y = (i + 1.5) * ui->ydim / 12.0;
+		if (ui->inverted)
+			y = ui->ydim - y; 
+		draw_centered_text(cr, ui->xdim / 24.0, y, 30.0, letter);
 	}
 	for (i = 0; i < 10; i++) {
 		char number[2];
@@ -163,6 +173,7 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
         g_signal_connect(G_OBJECT(ui->drawing_area), "configure_event",
 		G_CALLBACK(on_config_drawing_area), ui);
 
+	ui->inverted = 0;
 	gtk_widget_show_all(ui->window);
 }
 
