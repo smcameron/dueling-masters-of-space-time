@@ -19,6 +19,62 @@ static void quit_clicked(__attribute__((unused)) GtkWidget *widget,
 	gtk_main_quit();
 }
 
+static void draw_aligned_text(cairo_t *cr, double x, double y,
+			       double fontsize, const char *text, int alignment)
+{
+#define CENTERED 0
+#define LEFT_JUSTIFIED 1
+#define RIGHT_JUSTIFIED 2
+
+	double factor, direction;
+	cairo_text_extents_t extents;
+
+	switch(alignment) {
+		case CENTERED:
+			direction = -1.0;
+			factor = 0.5;
+			break;
+		case RIGHT_JUSTIFIED:
+			direction = -1.0;
+			factor = 1.0;
+			break;
+		case LEFT_JUSTIFIED:
+		default:
+			direction = 1.0;
+			factor = 1.0;
+			break;
+	}
+	cairo_select_font_face (cr, "SERIF", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+
+	cairo_set_font_size(cr, fontsize);
+	cairo_text_extents(cr, text, &extents);
+	x = x + direction * (factor * extents.width  + extents.x_bearing);
+	y = y - (extents.height / 2 + extents.y_bearing);
+
+	cairo_move_to(cr, x, y);
+	cairo_show_text(cr, text);
+}
+
+static inline void draw_centered_text(cairo_t *cr, double x, double y,
+			       double fontsize, const char *text)
+{
+	draw_aligned_text(cr, x, y, fontsize, text, CENTERED);
+}
+
+static inline void draw_right_justified_text(cairo_t *cr,
+				double x, double y,
+				double fontsize, const char *text)
+{
+	draw_aligned_text(cr, x, y, fontsize, text, RIGHT_JUSTIFIED);
+}
+
+static inline void draw_left_justified_text(cairo_t *cr,
+				double x, double y,
+				double fontsize, const char *text)
+{
+	draw_aligned_text(cr, x, y, fontsize, text, LEFT_JUSTIFIED);
+}
+
 static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 {
 	struct gui *ui = p;
@@ -51,6 +107,16 @@ static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 		cairo_line_to(cr, ui->xdim / 12.0 * i, 11.0 * ui->ydim / 12.0);
 		cairo_move_to(cr, ui->xdim / 12.0, i * ui->ydim / 12.0);
 		cairo_line_to(cr, 11.0 * ui->xdim / 12.0, i *ui->ydim / 12.0);
+	}
+	for (i = 0; i < 10; i++) {
+		char letter[2];
+		sprintf(letter, "%c", 'A' + i);
+		draw_centered_text(cr, ui->xdim / 24.0, (i + 1.5) * ui->ydim / 12.0, 30.0, letter);
+	}
+	for (i = 0; i < 10; i++) {
+		char number[2];
+		sprintf(number, "%d", i + 1);
+		draw_centered_text(cr, (i + 1.5) * ui->xdim / 12.0, ui->ydim / 24.0, 30.0, number);
 	}
 	cairo_stroke(cr);
 	cairo_destroy(cr);
