@@ -17,38 +17,48 @@ struct piece {
 	int x, y, prevx, prevy;
 #define UNKNOWN (-1)
 	int strength;
+
+#define WFIGHTER 6
+#define BFIGHTER 5
+#define XFIGHTER 4
+#define YFIGHTER 3
+#define ZFIGHTER 2
+#define ASTEROID 1
+#define HOMEPLANET 0
+
 	double sx, sy;
 	double r,g,b;
+	int pickedx, pickedy; /* place piece was picked from but before move is final */
 } full_set[] = {
 	{ "W", "W fighter.  Moves like chess knight.  Strongest piece.",
-			-1, -1, -1, -1, 6, -1, -1, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 6, -1, -1, 1.0, 0.3, 0.3, -1, -1 },
 	{ "B", "B fighter.  Moves like chess queen.  Only W is stronger.",
-			-1, -1, -1, -1, 5, -1, -1 , 1.0, 0.3, 0.3},
+			-1, -1, -1, -1, 5, -1, -1 , 1.0, 0.3, 0.3, -1, -1},
 	{ "X1", "X1 fighter.  Moves like chess rook.  W and B are stronger",
-			-1, -1, -1, -1, 4, -1, -1, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 4, -1, -1, 1.0, 0.3, 0.3 , -1, -1},
 	{ "X2", "X2 fighter.  Moves like chess rook.  W and B are stronger",
-			-1, -1, -1, -1, 4, -1, -1, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 4, -1, -1, 1.0, 0.3, 0.3 , -1, -1},
 	{ "Y1", "Y1 fighter.  Moves like chess bishop.  W, X, and B are stronger",
-			-1, -1, -1, -1, 3, -1, -1, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 3, -1, -1, 1.0, 0.3, 0.3 , -1, -1},
 	{ "Y2", "Y2 fighter.  Moves like chess bishop.  W, X, and B are stronger",
-			-1, -1, -1, -1, 3, -1, -1, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 3, -1, -1, 1.0, 0.3, 0.3 , -1, -1},
 	{ "Z1", "Z1 fighter.  Moves like chess queen.  Weakest mobile piece",
-			-1, -1, -1, -1, 2, -1, -1, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 2, -1, -1, 1.0, 0.3, 0.3 , -1, -1},
 	{ "Z2", "Z2 fighter.  Moves like chess queen.  Weakest mobile piece",
-			-1, -1, -1, -1, 2, -1, -1, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 2, -1, -1, 1.0, 0.3, 0.3 , -1, -1},
 	{ "Z3", "Z3 fighter.  Moves like chess queen.  Weakest mobile piece",
-			-1, -1, -1, -1, 2, -1, -1, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 2, -1, -1, 1.0, 0.3, 0.3 , -1, -1},
 	{ "Z4", "Z4 fighter.  Moves like chess queen.  Weakest mobile piece",
-			-1, -1, -1, -1, 2, -1, -1, 1.0, 0.3, 0.3 },
-	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 },
-	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 },
-	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 },
-	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 },
-	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 },
-	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 },
-	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 },
-	{ "HP", "Home Planet", -1, -1, -1, -1, 0, -1, -1, 1.0, 0.3, 0.3 },
-	{ NULL, NULL, 0, 0, 0, 0, 0, 0, 0, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 2, -1, -1, 1.0, 0.3, 0.3 , -1, -1},
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 , -1, -1},
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 , -1, -1},
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 , -1, -1},
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 , -1, -1},
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 , -1, -1},
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 , -1, -1},
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 , -1, -1},
+	{ "HP", "Home Planet", -1, -1, -1, -1, 0, -1, -1, 1.0, 0.3, 0.3 , -1, -1},
+	{ NULL, NULL, 0, 0, 0, 0, 0, 0, 0, 1.0, 0.3, 0.3 , 0, 0},
 };
 
 struct piece *p1, *p2;
@@ -216,6 +226,72 @@ static void draw_pieces_off_board(cairo_t *cr, struct piece *p, int *initial_cou
 	*initial_count = count;
 }
 
+static int legal_move(struct piece *p, int x, int y)
+{
+	int fromx, fromy, legal;
+
+	fromx = p->pickedx;
+	fromy = p->pickedy;
+
+	/* no move at all is legal always */
+	if (x == fromx && y == fromy)
+		return 1;
+
+	switch (p->strength) {
+		case ZFIGHTER:
+		case BFIGHTER:
+			return (abs(fromx - x) == abs(fromy - y) ||
+				(fromx == x) || (fromy == y));
+		case XFIGHTER:
+			return (fromx == x) || (fromy == y);
+		case YFIGHTER:
+			return (abs(fromx - x) == abs(fromy - y));
+		case HOMEPLANET:
+		case ASTEROID:
+			return 0;
+		case WFIGHTER:
+			return ((abs(fromx - x) == 1 && abs(fromy - y) == 2) ||
+				(abs(fromx - x) == 2 && abs(fromy - y) == 1));
+		default:
+			break;
+	}
+	return 0;
+}
+
+static void highlight_legal_square(cairo_t *cr, struct gui *ui, int x, int y)
+{
+	double x1, y1, x2, y2;
+
+	x1 = (x + 1) * ui->xdim / (12.0 * ui->piece_box_open);
+	x2 = (x + 2) * ui->xdim / (12.0 * ui->piece_box_open);
+	y1 = (invert(y) + 1) * (ui->ydim / 12.0);
+	y2 = (invert(y) + 2) * (ui->ydim / 12.0);
+
+	cairo_save(cr);
+	cairo_set_source_rgba(cr, 0.0, 1.0, 0.0, 0.1);
+	cairo_move_to(cr, x1, y1);
+	cairo_line_to(cr, x2, y1);
+	cairo_line_to(cr, x2, y2);
+	cairo_line_to(cr, x1, y2);
+	cairo_close_path(cr);
+	cairo_fill_preserve(cr);
+	cairo_stroke(cr);
+	cairo_restore(cr);
+}
+
+static void highlight_legal_moves(cairo_t *cr, struct gui *ui)
+{
+	int x, y;
+
+	if (ui->holding == NULL || ui->holding->pickedx == -1)
+		return;
+
+	for (x = 0; x < 10; x++)
+		for (y = 0; y < 10; y++)
+			if (legal_move(ui->holding, x, y))
+				highlight_legal_square(cr, ui, x, y);
+}
+
 static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 {
 	struct gui *ui = p;
@@ -279,6 +355,8 @@ static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 	}
 	cairo_stroke(cr);
 	cairo_restore(cr);
+
+	highlight_legal_moves(cr, ui);
 
 	draw_pieces_on_board(cr, p1);
 	draw_pieces_on_board(cr, p2);
@@ -367,10 +445,15 @@ static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 
 	if (event->type == GDK_BUTTON_PRESS) {
 		if (ui->holding != NULL) {
+			/* dropping a piece */
 			if (ui->mousex > (11.0 * ui->xdim / (12.0 * ui->piece_box_open))) {
+
+				/* off the board */
 				ui->holding->x = UNKNOWN;
 				ui->holding->sx = -100;
 				ui->holding->sy = -100;
+				ui->holding->pickedx = -1;
+				ui->holding->pickedy = -1;
 				ui->holding = NULL;
 				gtk_widget_queue_draw(w);
 			} else {
@@ -378,10 +461,12 @@ static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 				    ui->mousex - 10 < 11.0 * ui->xdim / (12.0 * ui->piece_box_open) &&
 				    ui->mousey - 10 > ui->ydim / 12.0 &&
 				    ui->mousey - 10 < 11.0 * ui->ydim / 12.0) {
-
+					/* on the board */
 					ui->holding->y = invert((ui->mousey - 10 - ui->ydim / 12.0) / (ui->ydim / 12.0));
 					ui->holding->x = (ui->mousex - 10 - (ui->xdim / (12.0 * ui->piece_box_open))) /
 							(ui->xdim / (12.0 * ui->piece_box_open));
+					ui->holding->pickedx = ui->holding->x;
+					ui->holding->pickedy = ui->holding->y;
 					ui->holding = NULL;
 					gtk_widget_queue_draw(w);
 				}
@@ -389,6 +474,7 @@ static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 			return;
 		}
 
+		/* picking up piece */
 		min = 30.0;
 		p = find_closest_piece(p1, NULL, ui->mousex, ui->mousey, &min); 
 		px = find_closest_piece(p2, p, ui->mousex, ui->mousey, &min); 
