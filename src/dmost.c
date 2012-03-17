@@ -245,6 +245,9 @@ static int legal_move(struct gui *ui, struct piece *p, int x, int y)
 	if (x == fromx && y == fromy)
 		return 1;
 
+	if (ui->mode == MODE_PLAYING && fromx == -1)
+		return 1;
+
 	if (ui->mode == MODE_PLAYING) {
 		switch (p->strength) {
 			case ZFIGHTER:
