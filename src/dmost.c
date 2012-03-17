@@ -700,6 +700,28 @@ void generic_draw_piece_on_board(struct piece *p, cairo_t *cr)
 		x2 = (p->prevx + 1.5) * ui.xdim / (12.0 * ui.piece_box_open);
 		y2 = (invert(p->prevy) + 1.5) * (ui.ydim / 12.0);
 		cairo_move_to(cr, x1, y1);
+		if (p->strength == WFIGHTER) {
+			double tx, ty;
+			double factor;
+			if (ui.inverted)
+				factor = -1;
+			else
+				factor = 1;
+			if (abs(p->x - p->prevx) < abs(p->y - p->prevy)) {
+				if (p->prevx < p->x)
+					tx = x1 - ui.xdim / (12.0 * ui.piece_box_open);
+				else
+					tx = x1 + ui.xdim / (12.0 * ui.piece_box_open);
+				ty = y1;
+			} else {
+				if (p->prevy < p->y)
+					ty = y1 - factor * ui.ydim / 12.0;
+				else
+					ty = y1 + factor * ui.ydim / 12.0;
+				tx = x1;
+			}
+			cairo_line_to(cr, tx, ty);
+		}
 		cairo_line_to(cr, x2, y2);
 		cairo_stroke(cr);
 		cairo_restore(cr);
