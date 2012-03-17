@@ -357,13 +357,13 @@ static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 				ui->holding = NULL;
 				gtk_widget_queue_draw(w);
 			} else {
-				if (ui->mousex > ui->xdim / (12.0 * ui->piece_box_open) &&
-				    ui->mousex < 11.0 * ui->xdim / (12.0 * ui->piece_box_open) &&
-				    ui->mousey > ui->ydim / 12.0 &&
-				    ui->mousey < 11.0 * ui->ydim / 12.0) {
+				if (ui->mousex - 10 > ui->xdim / (12.0 * ui->piece_box_open) &&
+				    ui->mousex - 10 < 11.0 * ui->xdim / (12.0 * ui->piece_box_open) &&
+				    ui->mousey - 10 > ui->ydim / 12.0 &&
+				    ui->mousey - 10 < 11.0 * ui->ydim / 12.0) {
 
-					ui->holding->y = (ui->mousey - ui->ydim / 12.0) / (ui->ydim / 12.0);
-					ui->holding->x = (ui->mousex - (ui->xdim / (12.0 * ui->piece_box_open))) /
+					ui->holding->y = (ui->mousey - 10 - ui->ydim / 12.0) / (ui->ydim / 12.0);
+					ui->holding->x = (ui->mousex - 10 - (ui->xdim / (12.0 * ui->piece_box_open))) /
 							(ui->xdim / (12.0 * ui->piece_box_open));
 					ui->holding = NULL;
 					gtk_widget_queue_draw(w);
