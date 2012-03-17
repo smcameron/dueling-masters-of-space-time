@@ -465,6 +465,8 @@ static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 					ui->holding->y = invert((ui->mousey - 10 - ui->ydim / 12.0) / (ui->ydim / 12.0));
 					ui->holding->x = (ui->mousex - 10 - (ui->xdim / (12.0 * ui->piece_box_open))) /
 							(ui->xdim / (12.0 * ui->piece_box_open));
+					ui->holding->prevx = ui->holding->pickedx;
+					ui->holding->prevy = ui->holding->pickedy;
 					ui->holding->pickedx = ui->holding->x;
 					ui->holding->pickedy = ui->holding->y;
 					ui->holding = NULL;
@@ -568,11 +570,28 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 void generic_draw_piece_on_board(struct piece *p, cairo_t *cr)
 {
 	double radius;
+	double x1, y1, x2, y2;
 
 	if (ui.xdim / ui.piece_box_open < ui.ydim)
 		radius = (0.75 * ui.xdim / (12.0 * ui.piece_box_open)) / 2.0;
 	else
 		radius = (0.75 * ui.ydim / 12.0) / 2.0;
+
+	/* draw trail */
+	if (p->prevx != -1) {
+		cairo_save(cr);
+		cairo_set_line_cap (cr, CAIRO_LINE_CAP_ROUND);
+		cairo_set_line_width (cr, MIN(ui.xdim / ui.piece_box_open, ui.ydim) / 64.0);
+		cairo_set_source_rgba(cr, p->r, p->g, p->b, 0.35);    // partially translucent
+		x1 = (p->x + 1.5) * ui.xdim / (12.0 * ui.piece_box_open);
+		y1 = (invert(p->y) + 1.5) * (ui.ydim / 12.0);
+		x2 = (p->prevx + 1.5) * ui.xdim / (12.0 * ui.piece_box_open);
+		y2 = (invert(p->prevy) + 1.5) * (ui.ydim / 12.0);
+		cairo_move_to(cr, x1, y1);
+		cairo_line_to(cr, x2, y2);
+		cairo_stroke(cr);
+		cairo_restore(cr);
+	}
 
 	cairo_save(cr);
 	cairo_arc(cr, p->sx, p->sy, radius, 0.0, 2.0 * M_PI); // full circle
