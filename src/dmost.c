@@ -67,11 +67,15 @@ struct gui {
 	GtkWidget *window;
 	GtkWidget *drawing_area;
 	GtkWidget *mode_combo_box;
+	GtkWidget *redblue_combo_box;
 	int xdim, ydim;
 	double piece_box_open;
 	int inverted;
 	int mousex, mousey;
 	struct piece *holding;
+	int playing_as;
+#define PLAYING_AS_RED 1
+#define PLAYING_AS_BLUE 2
 };
 
 static GdkColor black;
@@ -337,6 +341,14 @@ static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 		cairo_move_to(cr, ui->xdim / (12.0 * ui->piece_box_open), i * ui->ydim / 12.0);
 		cairo_line_to(cr, 11.0 * ui->xdim / (12.0 * ui->piece_box_open), i *ui->ydim / 12.0);
 	}
+
+	switch (ui->playing_as) {
+	case 1: cairo_set_source_rgb (cr, 1.0, 0.1, 0.1);
+		break;
+	case 2: cairo_set_source_rgb (cr, 0.1, 0.1, 1.0);
+		break;
+	}
+
 	for (i = 0; i < 10; i++) {
 		char letter[2];
 		double y;
@@ -489,6 +501,25 @@ static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 	return TRUE;
 }
 
+static void redblue_cb(GtkEntry *entry, gpointer data)
+{
+	struct gui *ui = data;
+	gchar *ctext;
+	
+	ctext = gtk_combo_box_get_active_text(GTK_COMBO_BOX(ui->redblue_combo_box));
+	ui->playing_as = -1;
+	if (strcmp(ctext, "Play as Red") == 0) {
+		ui->playing_as = PLAYING_AS_RED;
+		ui->inverted = 1;
+	} else {
+		if (strcmp(ctext, "Play as Blue") == 0) {
+			ui->playing_as = PLAYING_AS_BLUE;
+			ui->inverted = 0;
+		}
+	}
+	gtk_widget_queue_draw(ui->drawing_area);
+}
+
 static void init_ui(int *argc, char **argv[], struct gui *ui)
 {
 	GtkWidget *vbox, *scrolled_window, *hbox, *bottom_align,
@@ -546,6 +577,16 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
         gtk_combo_box_set_active(GTK_COMBO_BOX(ui->mode_combo_box), 0);
         gtk_container_add(GTK_CONTAINER(hbox), ui->mode_combo_box);
 
+        ui->redblue_combo_box = gtk_combo_box_new_text();
+        gtk_combo_box_append_text(GTK_COMBO_BOX(ui->redblue_combo_box), "Play as Red");
+        gtk_combo_box_append_text(GTK_COMBO_BOX(ui->redblue_combo_box), "Play as Blue");
+        gtk_combo_box_set_active(GTK_COMBO_BOX(ui->redblue_combo_box), 0);
+        gtk_container_add(GTK_CONTAINER(hbox), ui->redblue_combo_box);
+	g_signal_connect(GTK_OBJECT(ui->redblue_combo_box), "changed",
+				G_CALLBACK(redblue_cb), ui);
+
+        gtk_widget_set_tooltip_text(ui->redblue_combo_box, "Choose to play as Red or Blue");
+
 	/* add invert button */
 	invert_button = gtk_button_new_with_label("Invert Board");
         g_signal_connect(invert_button, "clicked", G_CALLBACK(invert_clicked), ui);
@@ -560,9 +601,10 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 
 	gtk_box_pack_start(GTK_BOX(vbox), bottom_align, FALSE, FALSE, 0);
 
-	ui->inverted = 0;
+	ui->inverted = 1;
 	ui->piece_box_open = 1;
 	ui->holding = NULL;
+	ui->playing_as = PLAYING_AS_RED;
 
 	gtk_widget_show_all(ui->window);
 }
