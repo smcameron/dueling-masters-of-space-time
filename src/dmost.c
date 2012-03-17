@@ -56,6 +56,7 @@ struct piece *p1, *p2;
 struct gui {
 	GtkWidget *window;
 	GtkWidget *drawing_area;
+	GtkWidget *mode_combo_box;
 	int xdim, ydim;
 	double piece_box_open;
 	int inverted;
@@ -386,7 +387,8 @@ static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 
 static void init_ui(int *argc, char **argv[], struct gui *ui)
 {
-	GtkWidget *vbox, *scrolled_window;
+	GtkWidget *vbox, *scrolled_window, *hbox, *bottom_align,
+			*quit_button;
 
 	if (!g_thread_supported())
 		g_thread_init(NULL);
@@ -425,9 +427,33 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 				| GDK_BUTTON_PRESS_MASK
 				| GDK_POINTER_MOTION_MASK
 				| GDK_POINTER_MOTION_HINT_MASK);
+
+        /*
+         * Set up alignments for widgets at the bottom of ui, 
+         * align bottom left, expand horizontally but not vertically
+         */
+	bottom_align = gtk_alignment_new(0, 1, 1, 0);
+	hbox = gtk_hbox_new(FALSE, 0);
+	gtk_container_add(GTK_CONTAINER(bottom_align), hbox);
+        ui->mode_combo_box = gtk_combo_box_new_text();
+        gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Free form");
+        gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Board Setup");
+        gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Assisted Play");
+        gtk_combo_box_set_active(GTK_COMBO_BOX(ui->mode_combo_box), 0);
+        gtk_container_add(GTK_CONTAINER(hbox), ui->mode_combo_box);
+
+	/* add Quit button */
+	quit_button = gtk_button_new_with_label("Quit Dueling");
+        g_signal_connect(quit_button, "clicked", G_CALLBACK(quit_clicked), NULL);
+        gtk_box_pack_start(GTK_BOX(hbox), quit_button, FALSE, FALSE, 3);
+        gtk_widget_set_tooltip_text(quit_button, "Quit Dueling");
+
+	gtk_box_pack_start(GTK_BOX(vbox), bottom_align, FALSE, FALSE, 0);
+
 	ui->inverted = 0;
 	ui->piece_box_open = 1;
 	ui->holding = NULL;
+
 	gtk_widget_show_all(ui->window);
 }
 
