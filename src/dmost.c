@@ -59,6 +59,7 @@ struct gui {
 	int xdim, ydim;
 	double piece_box_open;
 	int inverted;
+	int mousex, mousey;
 };
 
 static GdkColor black;
@@ -231,6 +232,36 @@ static gint on_config_drawing_area(GtkWidget *w, GdkEventConfigure *event,
 	ui->ydim = w->allocation.height;
 }
 
+static int on_mouse_motion(GtkWidget *w, GdkEvent *event, gpointer p)
+{
+	struct gui *ui = p;
+	GdkEventMotion *e = (GdkEventMotion *) event;
+
+	if (e) {
+		ui->mousex = e->x;
+		ui->mousey = e->y;
+		if (ui->piece_box_open > 1.0 && ui->mousex < ui->xdim / 2.2) {
+			gtk_widget_queue_draw(w);
+			ui->piece_box_open *= 0.8;
+			if (ui->piece_box_open < 1.0)
+				ui->piece_box_open = 1.0;
+		} else {
+			if (ui->mousex > 11.0 * (ui->xdim / (12.0 * ui->piece_box_open)) && ui->piece_box_open < 2.0) {
+				ui->piece_box_open *= 1.2;
+				gtk_widget_queue_draw(w);
+				if (ui->piece_box_open > 2.0)
+					ui->piece_box_open = 2.0;
+			}
+		}
+	}
+	return TRUE;
+}
+
+static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer p)
+{
+	return TRUE;
+}
+
 static void init_ui(int *argc, char **argv[], struct gui *ui)
 {
 	GtkWidget *vbox, *scrolled_window;
@@ -261,8 +292,17 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
         g_signal_connect(G_OBJECT(ui->drawing_area), "expose_event",
 			G_CALLBACK(on_expose_drawing_area), ui);
         g_signal_connect(G_OBJECT(ui->drawing_area), "configure_event",
-		G_CALLBACK(on_config_drawing_area), ui);
+			G_CALLBACK(on_config_drawing_area), ui);
+	gtk_signal_connect(GTK_OBJECT(ui->drawing_area), "motion_notify_event",
+			G_CALLBACK(on_mouse_motion), ui);
+	gtk_signal_connect(GTK_OBJECT(ui->drawing_area), "button_press_event",
+			G_CALLBACK(on_button_clicked), ui);
 
+	gtk_widget_set_events(ui->drawing_area, GDK_EXPOSURE_MASK
+				| GDK_LEAVE_NOTIFY_MASK
+				| GDK_BUTTON_PRESS_MASK
+				| GDK_POINTER_MOTION_MASK
+				| GDK_POINTER_MOTION_HINT_MASK);
 	ui->inverted = 0;
 	ui->piece_box_open = 2;
 	gtk_widget_show_all(ui->window);
