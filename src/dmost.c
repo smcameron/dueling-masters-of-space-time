@@ -10,7 +10,6 @@
 
 struct piece;
 
-void generic_draw_piece(struct piece *p, cairo_t *cr);
 
 struct piece {
 	char *name;
@@ -18,39 +17,38 @@ struct piece {
 	int x, y, prevx, prevy;
 #define UNKNOWN (-1)
 	int strength;
-	void (*draw)(struct piece *p, cairo_t *cr, double x, double y);
 	double sx, sy;
 	double r,g,b;
 } full_set[] = {
 	{ "W", "W fighter.  Moves like chess knight.  Strongest piece.",
-			-1, -1, -1, -1, 6, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 6, -1, -1, 1.0, 0.3, 0.3 },
 	{ "B", "B fighter.  Moves like chess queen.  Only W is stronger.",
-			-1, -1, -1, -1, 5, generic_draw_piece, -1, -1 , 1.0, 0.3, 0.3},
+			-1, -1, -1, -1, 5, -1, -1 , 1.0, 0.3, 0.3},
 	{ "X1", "X1 fighter.  Moves like chess rook.  W and B are stronger",
-			-1, -1, -1, -1, 4, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 4, -1, -1, 1.0, 0.3, 0.3 },
 	{ "X2", "X2 fighter.  Moves like chess rook.  W and B are stronger",
-			-1, -1, -1, -1, 4, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 4, -1, -1, 1.0, 0.3, 0.3 },
 	{ "Y1", "Y1 fighter.  Moves like chess bishop.  W, X, and B are stronger",
-			-1, -1, -1, -1, 3, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 3, -1, -1, 1.0, 0.3, 0.3 },
 	{ "Y2", "Y2 fighter.  Moves like chess bishop.  W, X, and B are stronger",
-			-1, -1, -1, -1, 3, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 3, -1, -1, 1.0, 0.3, 0.3 },
 	{ "Z1", "Z1 fighter.  Moves like chess queen.  Weakest mobile piece",
-			-1, -1, -1, -1, 2, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 2, -1, -1, 1.0, 0.3, 0.3 },
 	{ "Z2", "Z2 fighter.  Moves like chess queen.  Weakest mobile piece",
-			-1, -1, -1, -1, 2, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 2, -1, -1, 1.0, 0.3, 0.3 },
 	{ "Z3", "Z3 fighter.  Moves like chess queen.  Weakest mobile piece",
-			-1, -1, -1, -1, 2, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 2, -1, -1, 1.0, 0.3, 0.3 },
 	{ "Z4", "Z4 fighter.  Moves like chess queen.  Weakest mobile piece",
-			-1, -1, -1, -1, 2, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
-	{ "A", "Asteroid", -1, -1, -1, -1, 1, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
-	{ "A", "Asteroid", -1, -1, -1, -1, 1, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
-	{ "A", "Asteroid", -1, -1, -1, -1, 1, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
-	{ "A", "Asteroid", -1, -1, -1, -1, 1, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
-	{ "A", "Asteroid", -1, -1, -1, -1, 1, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
-	{ "A", "Asteroid", -1, -1, -1, -1, 1, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
-	{ "A", "Asteroid", -1, -1, -1, -1, 1, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
-	{ "HP", "Home Planet", -1, -1, -1, -1, 0, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
-	{ NULL, NULL, 0, 0, 0, 0, 0, NULL, 0, 0, 1.0, 0.3, 0.3 },
+			-1, -1, -1, -1, 2, -1, -1, 1.0, 0.3, 0.3 },
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 },
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 },
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 },
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 },
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 },
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 },
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, -1, -1, 1.0, 0.3, 0.3 },
+	{ "HP", "Home Planet", -1, -1, -1, -1, 0, -1, -1, 1.0, 0.3, 0.3 },
+	{ NULL, NULL, 0, 0, 0, 0, 0, 0, 0, 1.0, 0.3, 0.3 },
 };
 
 struct piece *p1, *p2;
@@ -59,6 +57,7 @@ struct gui {
 	GtkWidget *window;
 	GtkWidget *drawing_area;
 	int xdim, ydim;
+	double piece_box_open;
 	int inverted;
 };
 
@@ -128,16 +127,30 @@ static inline void draw_left_justified_text(cairo_t *cr,
 	draw_aligned_text(cr, x, y, fontsize, text, LEFT_JUSTIFIED);
 }
 
-static void draw_pieces(cairo_t *cr, struct piece *p)
+static void draw_pieces_on_board(cairo_t *cr, struct piece *p)
 {
 	int i;
 
 	for (i = 0; p[i].name != NULL; i++) {
 		if (p[i].x == UNKNOWN)
 			continue;
-		p[i].sx = p[i].x * ui.xdim / 12.0 + 1.5 * (ui.xdim / 12.0);
+		p[i].sx = p[i].x * ui.xdim / (12.0 * ui.piece_box_open) + 
+					1.5 * ui.xdim / (ui.piece_box_open * 12.0);
 		p[i].sy = p[i].y * ui.ydim / 12.0 + 1.5 * (ui.ydim / 12.0);
-		generic_draw_piece(&p[i], cr);
+		generic_draw_piece_on_board(&p[i], cr);
+	}
+}
+
+static void draw_pieces_off_board(cairo_t *cr, struct piece *p)
+{
+	int i, count;
+	double x, y;
+
+	count = 0;
+	for (i = 0; p[i].name != NULL; i++) {
+		if (p[i].x != UNKNOWN)
+			continue;
+		count++;
 	}
 }
 
@@ -163,7 +176,9 @@ static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 		cairo_scale(cr, 1.0, -1.0);
 		cairo_translate(cr, 0.0, -ui->ydim);
 	}
-	cairo_scale (cr, (double) ui->xdim / (double) xd, (double) ui->ydim / (double) yd);
+
+	cairo_scale (cr, (double) ui->xdim / (double) xd / ui->piece_box_open,
+				(double) ui->ydim / (double) yd);
 
 
 	cairo_set_source_surface (cr, galaxy_image, 0, 0);
@@ -175,10 +190,10 @@ static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 	// cairo_set_line_width(cr, 0.5);
 	cairo_set_source_rgb (cr, 0.5, 1, 0.5);
 	for (i = 1; i <= 11; i++) {
-		cairo_move_to(cr, ui->xdim / 12.0 * i, ui->ydim / 12.0);
-		cairo_line_to(cr, ui->xdim / 12.0 * i, 11.0 * ui->ydim / 12.0);
-		cairo_move_to(cr, ui->xdim / 12.0, i * ui->ydim / 12.0);
-		cairo_line_to(cr, 11.0 * ui->xdim / 12.0, i *ui->ydim / 12.0);
+		cairo_move_to(cr, ui->xdim / (12.0 * ui->piece_box_open) * i, ui->ydim / 12.0);
+		cairo_line_to(cr, ui->xdim / (12.0 * ui->piece_box_open) * i, 11.0 * ui->ydim / 12.0);
+		cairo_move_to(cr, ui->xdim / (12.0 * ui->piece_box_open), i * ui->ydim / 12.0);
+		cairo_line_to(cr, 11.0 * ui->xdim / (12.0 * ui->piece_box_open), i *ui->ydim / 12.0);
 	}
 	for (i = 0; i < 10; i++) {
 		char letter[2];
@@ -187,18 +202,22 @@ static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 		y = (i + 1.5) * ui->ydim / 12.0;
 		if (ui->inverted)
 			y = ui->ydim - y; 
-		draw_centered_text(cr, ui->xdim / 24.0, y, ui->ydim / 30.0, letter);
+		draw_centered_text(cr, ui->xdim / (24.0 * ui->piece_box_open), y, ui->ydim / 30.0, letter);
 	}
 	for (i = 0; i < 10; i++) {
 		char number[2];
 		sprintf(number, "%d", i + 1);
-		draw_centered_text(cr, (i + 1.5) * ui->xdim / 12.0, ui->ydim / 24.0, ui->xdim / 30.0, number);
+		draw_centered_text(cr, (i + 1.5) * ui->xdim / (12.0 * ui->piece_box_open),
+					ui->ydim / 24.0, (ui->xdim / ui->piece_box_open) / 30.0,
+					number);
 	}
 	cairo_stroke(cr);
 	cairo_restore(cr);
 
-	draw_pieces(cr, p1);
-	draw_pieces(cr, p2);
+	draw_pieces_on_board(cr, p1);
+	draw_pieces_on_board(cr, p2);
+	draw_pieces_off_board(cr, p1);
+	draw_pieces_off_board(cr, p2);
 
 	cairo_destroy(cr);
 }
@@ -245,15 +264,16 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 		G_CALLBACK(on_config_drawing_area), ui);
 
 	ui->inverted = 0;
+	ui->piece_box_open = 2;
 	gtk_widget_show_all(ui->window);
 }
 
-void generic_draw_piece(struct piece *p, cairo_t *cr)
+void generic_draw_piece_on_board(struct piece *p, cairo_t *cr)
 {
 	double radius;
 
-	if (ui.xdim < ui.ydim)
-		radius = (0.75 * ui.xdim / 12.0) / 2.0;
+	if (ui.xdim / ui.piece_box_open < ui.ydim)
+		radius = (0.75 * ui.xdim / (12.0 * ui.piece_box_open)) / 2.0;
 	else
 		radius = (0.75 * ui.ydim / 12.0) / 2.0;
 
