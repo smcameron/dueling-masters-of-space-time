@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <malloc.h>
 #include <math.h>
+#include <stdint.h>
 
 #include <gtk/gtk.h>
 #include <cairo.h>
@@ -80,6 +81,7 @@ struct gui {
 #define MODE_FREE 0
 #define MODE_BOARD_SETUP 1
 #define MODE_PLAYING 2
+	uint8_t visited[10][10];
 };
 
 static GdkColor black;
@@ -285,7 +287,8 @@ static int legal_move(struct gui *ui, struct piece *p, int x, int y)
 	printf("unknown mode %d\n", ui->mode);
 }
 
-static void highlight_legal_square(cairo_t *cr, struct gui *ui, int x, int y)
+static void highlight_square(cairo_t *cr, struct gui *ui, int x, int y,
+		double r, double g, double b, double a)
 {
 	double x1, y1, x2, y2;
 
@@ -295,7 +298,7 @@ static void highlight_legal_square(cairo_t *cr, struct gui *ui, int x, int y)
 	y2 = (invert(y) + 2) * (ui->ydim / 12.0);
 
 	cairo_save(cr);
-	cairo_set_source_rgba(cr, 0.0, 1.0, 0.0, 0.1);
+	cairo_set_source_rgba(cr, r, g, b, a); 
 	cairo_move_to(cr, x1, y1);
 	cairo_line_to(cr, x2, y1);
 	cairo_line_to(cr, x2, y2);
@@ -304,6 +307,11 @@ static void highlight_legal_square(cairo_t *cr, struct gui *ui, int x, int y)
 	cairo_fill_preserve(cr);
 	cairo_stroke(cr);
 	cairo_restore(cr);
+}
+
+static void highlight_legal_square(cairo_t *cr, struct gui *ui, int x, int y)
+{
+	highlight_square(cr, ui, x, y, 0.0, 1.0, 0.0, 0.1);
 }
 
 static void highlight_legal_moves(cairo_t *cr, struct gui *ui)
@@ -320,6 +328,28 @@ static void highlight_legal_moves(cairo_t *cr, struct gui *ui)
 		for (y = 0; y < 10; y++)
 			if (legal_move(ui, ui->holding, x, y))
 				highlight_legal_square(cr, ui, x, y);
+}
+
+static void highlight_visited_squares(cairo_t *cr, struct gui *ui)
+{
+	int x, y;
+	double r, b;
+
+	r = 0.0;
+	b = 0.0;
+	if (ui->playing_as == PLAYING_AS_RED)
+		r = 1.0;
+	if (ui->playing_as == PLAYING_AS_BLUE)
+		b = 1.0;
+
+	cairo_stroke(cr);
+	cairo_save(cr);	
+	for (x = 0; x < 10; x++)
+		for (y = 0; y < 10; y++)
+			if (ui->visited[x][y])
+				highlight_square(cr, ui, x, y, r, 0.0, b, 0.2);
+	cairo_stroke(cr);
+	cairo_restore(cr);
 }
 
 static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
@@ -394,6 +424,7 @@ static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 	cairo_stroke(cr);
 	cairo_restore(cr);
 
+	highlight_visited_squares(cr, ui);
 	highlight_legal_moves(cr, ui);
 
 	draw_pieces_on_board(cr, p1);
@@ -481,7 +512,8 @@ static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 	double min;
 	struct piece *p = NULL, *px = NULL;
 
-	if (event->type == GDK_BUTTON_PRESS) {
+	if (event->type == GDK_BUTTON_PRESS && event->button.button == 1) {
+		/* attempt to pick up or drop a piece */
 		if (ui->holding != NULL) {
 			/* dropping a piece */
 			if (ui->mousex > (11.0 * ui->xdim / (12.0 * ui->piece_box_open))) {
@@ -532,8 +564,24 @@ static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 		if (p != NULL)
 			ui->holding = p;
 		gtk_widget_queue_draw(ui->drawing_area);
+		return TRUE;
 	}
-	return TRUE;
+
+	if (event->type == GDK_BUTTON_PRESS && event->button.button == 3) {
+		/* attept to mark a square as visited */
+		if (ui->mousex > ui->xdim / (12.0 * ui->piece_box_open) &&
+		    ui->mousex < 11.0 * ui->xdim / (12.0 * ui->piece_box_open) &&
+		    ui->mousey > ui->ydim / 12.0 &&
+		    ui->mousey < 11.0 * ui->ydim / 12.0) {
+			/* on the board */
+			int tmpx, tmpy;
+			tmpy = invert((ui->mousey - ui->ydim / 12.0) / (ui->ydim / 12.0));
+			tmpx = (ui->mousex - (ui->xdim / (12.0 * ui->piece_box_open))) /
+					(ui->xdim / (12.0 * ui->piece_box_open));
+			ui->visited[tmpx][tmpy] = !ui->visited[tmpx][tmpy];
+			gtk_widget_queue_draw(ui->drawing_area);
+		}
+	}
 }
 
 static void mode_cb(GtkEntry *entry, gpointer data)
@@ -675,6 +723,7 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 	ui->holding = NULL;
 	ui->playing_as = PLAYING_AS_RED;
 	ui->mode = MODE_BOARD_SETUP;
+	memset(ui->visited, 0, sizeof(ui->visited));
 
 	gtk_widget_show_all(ui->window);
 }
