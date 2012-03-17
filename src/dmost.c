@@ -412,7 +412,7 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 				| GDK_POINTER_MOTION_MASK
 				| GDK_POINTER_MOTION_HINT_MASK);
 	ui->inverted = 0;
-	ui->piece_box_open = 2;
+	ui->piece_box_open = 1;
 	ui->holding = NULL;
 	gtk_widget_show_all(ui->window);
 }
@@ -461,10 +461,6 @@ static void init_pieces(struct piece **p1, struct piece **p2)
 		(*p2)[i].g = 0.3;
 		(*p2)[i].b = 1.0;
 	}
-	(*p1)[0].x = 0;
-	(*p1)[0].y = 0;
-	(*p2)[0].x = 9;
-	(*p2)[0].y = 9;
 }
 
 int main(int argc, char *argv[])
