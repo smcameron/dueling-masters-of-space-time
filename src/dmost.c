@@ -142,17 +142,49 @@ static void draw_pieces_on_board(cairo_t *cr, struct piece *p)
 	}
 }
 
-static void draw_pieces_off_board(cairo_t *cr, struct piece *p)
+void generic_draw_piece_off_board(struct piece *p, cairo_t *cr, double radius)
+{
+	cairo_save(cr);
+	cairo_arc(cr, p->sx, p->sy, radius, 0.0, 2.0 * M_PI); // full circle
+	cairo_set_source_rgba(cr, p->r, p->g, p->b, 0.25);    // partially translucent
+	cairo_fill_preserve(cr);
+	cairo_stroke(cr);
+	cairo_restore(cr);
+	cairo_save(cr);
+	cairo_set_line_width (cr, MIN(ui.xdim, ui.ydim) / 200.0);
+	cairo_set_source_rgba(cr, p->r, p->g, p->b, 1.0);    // partially translucent
+	cairo_arc(cr, p->sx, p->sy, radius * 1.1, 0.0, 2.0 * M_PI); // full circle
+	cairo_stroke(cr);
+	cairo_restore(cr);  // back to opaque black
+	cairo_save(cr);
+	cairo_set_source_rgba(cr, p->r, p->g, p->b, 1.0);    // partially translucent
+	if (radius > 15.0)
+		draw_centered_text(cr, p->sx, p->sy, MIN(ui.xdim, ui.ydim) / 32.0, p->name);
+	cairo_stroke(cr);
+	cairo_restore(cr);  // back to opaque black
+}
+
+static void draw_pieces_off_board(cairo_t *cr, struct piece *p, int *initial_count)
 {
 	int i, count;
-	double x, y;
+	double x, y, leftx, xwidth, slotwidth;
+	double radius;
 
-	count = 0;
+	leftx = (11.0 * ui.xdim / (12.0 * ui.piece_box_open));
+	xwidth = ui.xdim - leftx; 
+	slotwidth = MIN(xwidth / 6.0, ui.xdim / (12.0)); 
+	radius = (slotwidth) / 4.0;
+
+	count = *initial_count;
 	for (i = 0; p[i].name != NULL; i++) {
 		if (p[i].x != UNKNOWN)
 			continue;
+		p[i].sx = leftx + (count % 4) * slotwidth + slotwidth / 2.0;
+		p[i].sy = (ui.ydim / 12.0) + (count / 4) * slotwidth / 1.5;
+		generic_draw_piece_off_board(&p[i], cr, radius);
 		count++;
 	}
+	*initial_count = count;
 }
 
 static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
@@ -162,7 +194,7 @@ static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 	static cairo_surface_t *galaxy_image = NULL;
 	static int xd, yd;
 	static double dash[] = { 1.0, 2.0 };
-	int i;
+	int i, off_board_piece_count = 0;
 
 	if (galaxy_image == NULL) {
 		galaxy_image = cairo_image_surface_create_from_png("pinwheel.png");
@@ -217,8 +249,8 @@ static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 
 	draw_pieces_on_board(cr, p1);
 	draw_pieces_on_board(cr, p2);
-	draw_pieces_off_board(cr, p1);
-	draw_pieces_off_board(cr, p2);
+	draw_pieces_off_board(cr, p1, &off_board_piece_count);
+	draw_pieces_off_board(cr, p2, &off_board_piece_count);
 
 	cairo_destroy(cr);
 }
