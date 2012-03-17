@@ -60,6 +60,7 @@ struct gui {
 	double piece_box_open;
 	int inverted;
 	int mousex, mousey;
+	struct piece *holding;
 };
 
 static GdkColor black;
@@ -135,6 +136,8 @@ static void draw_pieces_on_board(cairo_t *cr, struct piece *p)
 	for (i = 0; p[i].name != NULL; i++) {
 		if (p[i].x == UNKNOWN)
 			continue;
+		if (&p[i] == ui.holding)
+			continue;
 		p[i].sx = p[i].x * ui.xdim / (12.0 * ui.piece_box_open) + 
 					1.5 * ui.xdim / (ui.piece_box_open * 12.0);
 		p[i].sy = p[i].y * ui.ydim / 12.0 + 1.5 * (ui.ydim / 12.0);
@@ -179,6 +182,8 @@ static void draw_pieces_off_board(cairo_t *cr, struct piece *p, int *initial_cou
 	for (i = 0; p[i].name != NULL; i++) {
 		if (p[i].x != UNKNOWN)
 			continue;
+		if (&p[i] == ui.holding)
+			continue;
 		p[i].sx = leftx + (count % 4) * slotwidth + slotwidth / 2.0;
 		p[i].sy = (ui.ydim / 12.0) + (count / 4) * slotwidth / 1.5;
 		generic_draw_piece_off_board(&p[i], cr, radius);
@@ -196,6 +201,10 @@ static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 	static double dash[] = { 1.0, 2.0 };
 	int i, off_board_piece_count = 0;
 
+	if (ui->holding != NULL) {
+		ui->holding->sx = ui->mousex - 20;
+		ui->holding->sy = ui->mousey - 20;
+	}
 	if (galaxy_image == NULL) {
 		galaxy_image = cairo_image_surface_create_from_png("pinwheel.png");
 		xd = cairo_image_surface_get_width(galaxy_image);
@@ -251,6 +260,8 @@ static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 	draw_pieces_on_board(cr, p2);
 	draw_pieces_off_board(cr, p1, &off_board_piece_count);
 	draw_pieces_off_board(cr, p2, &off_board_piece_count);
+	if (ui->holding)
+		generic_draw_piece_off_board(ui->holding, cr, ui->xdim / 24.0);
 
 	cairo_destroy(cr);
 }
@@ -278,19 +289,64 @@ static int on_mouse_motion(GtkWidget *w, GdkEvent *event, gpointer p)
 			if (ui->piece_box_open < 1.0)
 				ui->piece_box_open = 1.0;
 		} else {
-			if (ui->mousex > 11.0 * (ui->xdim / (12.0 * ui->piece_box_open)) && ui->piece_box_open < 2.0) {
+			if (ui->mousex > 11.0 * (ui->xdim / (12.0 * ui->piece_box_open)) &&
+						ui->piece_box_open < 2.0) {
 				ui->piece_box_open *= 1.2;
 				gtk_widget_queue_draw(w);
 				if (ui->piece_box_open > 2.0)
 					ui->piece_box_open = 2.0;
 			}
 		}
+		if (ui->holding)
+			gtk_widget_queue_draw(w);
 	}
 	return TRUE;
 }
 
-static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer p)
+static struct piece *find_closest_piece(struct piece *p, double x, double y, double *min)
 {
+	int i;
+	double dist, best_dist;
+	struct piece *found = NULL;
+
+	for (i = 0; p[i].name != NULL; i++) {
+		dist = (p[i].sx - ui.mousex) * (p[i].sx - ui.mousex) +
+			(p[i].sy - ui.mousey) * (p[i].sy - ui.mousey);
+		if (dist < (*min) * (*min) && found == NULL) {
+			found = &p[i];
+			best_dist = dist;
+		}
+		if (found != NULL && dist < best_dist) {
+			found = &p[i];
+			best_dist = dist;
+		}
+	}
+	if (found)
+		*min = best_dist;
+	return found;
+}
+
+static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
+{
+	struct gui *ui = ptr;
+	int i;
+	int first = 1;
+	double min;
+	struct piece *p = NULL, *px = NULL;
+
+	if (ui->holding != NULL) {
+		return;
+	}
+	if (event->type == GDK_BUTTON_PRESS) {
+		min = 30.0;
+		p = find_closest_piece(p1, ui->mousex, ui->mousey, &min); 
+		px = find_closest_piece(p2, ui->mousex, ui->mousey, &min); 
+		if (px)
+			p = px;
+		if (p != NULL)
+			ui->holding = p;
+		gtk_widget_queue_draw(ui->drawing_area);
+	}
 	return TRUE;
 }
 
@@ -337,6 +393,7 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 				| GDK_POINTER_MOTION_HINT_MASK);
 	ui->inverted = 0;
 	ui->piece_box_open = 2;
+	ui->holding = NULL;
 	gtk_widget_show_all(ui->window);
 }
 
