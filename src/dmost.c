@@ -334,10 +334,30 @@ static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 	double min;
 	struct piece *p = NULL, *px = NULL;
 
-	if (ui->holding != NULL) {
-		return;
-	}
 	if (event->type == GDK_BUTTON_PRESS) {
+		if (ui->holding != NULL) {
+			if (ui->mousex > (11.0 * ui->xdim / (12.0 * ui->piece_box_open))) {
+				ui->holding->x = UNKNOWN;
+				ui->holding->sx = -100;
+				ui->holding->sy = -100;
+				ui->holding = NULL;
+				gtk_widget_queue_draw(w);
+			} else {
+				if (ui->mousex > ui->xdim / (12.0 * ui->piece_box_open) &&
+				    ui->mousex < 11.0 * ui->xdim / (12.0 * ui->piece_box_open) &&
+				    ui->mousey > ui->ydim / 12.0 &&
+				    ui->mousey < 11.0 * ui->ydim / 12.0) {
+
+					ui->holding->y = (ui->mousey - ui->ydim / 12.0) / (ui->ydim / 12.0);
+					ui->holding->x = (ui->mousex - (ui->xdim / (12.0 * ui->piece_box_open))) /
+							(ui->xdim / (12.0 * ui->piece_box_open));
+					ui->holding = NULL;
+					gtk_widget_queue_draw(w);
+				}
+			}
+			return;
+		}
+
 		min = 30.0;
 		p = find_closest_piece(p1, ui->mousex, ui->mousey, &min); 
 		px = find_closest_piece(p2, ui->mousex, ui->mousey, &min); 
