@@ -139,6 +139,13 @@ static inline void draw_left_justified_text(cairo_t *cr,
 	draw_aligned_text(cr, x, y, fontsize, text, LEFT_JUSTIFIED);
 }
 
+int invert(int y)
+{
+	if (!ui.inverted)
+		return y;
+	return 9 - y;
+}
+
 static void draw_pieces_on_board(cairo_t *cr, struct piece *p)
 {
 	int i;
@@ -150,7 +157,7 @@ static void draw_pieces_on_board(cairo_t *cr, struct piece *p)
 			continue;
 		p[i].sx = p[i].x * ui.xdim / (12.0 * ui.piece_box_open) + 
 					1.5 * ui.xdim / (ui.piece_box_open * 12.0);
-		p[i].sy = p[i].y * ui.ydim / 12.0 + 1.5 * (ui.ydim / 12.0);
+		p[i].sy = invert(p[i].y) * ui.ydim / 12.0 + 1.5 * (ui.ydim / 12.0);
 		generic_draw_piece_on_board(&p[i], cr);
 	}
 }
@@ -372,7 +379,7 @@ static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 				    ui->mousey - 10 > ui->ydim / 12.0 &&
 				    ui->mousey - 10 < 11.0 * ui->ydim / 12.0) {
 
-					ui->holding->y = (ui->mousey - 10 - ui->ydim / 12.0) / (ui->ydim / 12.0);
+					ui->holding->y = invert((ui->mousey - 10 - ui->ydim / 12.0) / (ui->ydim / 12.0));
 					ui->holding->x = (ui->mousex - 10 - (ui->xdim / (12.0 * ui->piece_box_open))) /
 							(ui->xdim / (12.0 * ui->piece_box_open));
 					ui->holding = NULL;
