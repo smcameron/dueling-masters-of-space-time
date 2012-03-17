@@ -303,11 +303,18 @@ static int on_mouse_motion(GtkWidget *w, GdkEvent *event, gpointer p)
 	return TRUE;
 }
 
-static struct piece *find_closest_piece(struct piece *p, double x, double y, double *min)
+static struct piece *find_closest_piece(struct piece *p, struct piece *prev,
+					double x, double y, double *min)
 {
 	int i;
 	double dist, best_dist;
 	struct piece *found = NULL;
+	
+	if (prev) {
+		best_dist = (prev->sx - x) * (prev->sx - x) + 
+				(prev->sy - y) * (prev->sy - y);
+		found = prev;
+	}
 
 	for (i = 0; p[i].name != NULL; i++) {
 		dist = (p[i].sx - ui.mousex) * (p[i].sx - ui.mousex) +
@@ -359,8 +366,8 @@ static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 		}
 
 		min = 30.0;
-		p = find_closest_piece(p1, ui->mousex, ui->mousey, &min); 
-		px = find_closest_piece(p2, ui->mousex, ui->mousey, &min); 
+		p = find_closest_piece(p1, NULL, ui->mousex, ui->mousey, &min); 
+		px = find_closest_piece(p2, p, ui->mousex, ui->mousey, &min); 
 		if (px)
 			p = px;
 		if (p != NULL)
