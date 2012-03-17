@@ -324,7 +324,7 @@ static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 
 
 	cairo_set_source_surface (cr, galaxy_image, 0, 0);
-	cairo_paint_with_alpha(cr, 0.7);
+	cairo_paint_with_alpha(cr, 0.5);
 	cairo_restore(cr);
 
 	cairo_save(cr);
