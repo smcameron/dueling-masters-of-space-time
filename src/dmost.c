@@ -76,6 +76,10 @@ struct gui {
 	int playing_as;
 #define PLAYING_AS_RED 1
 #define PLAYING_AS_BLUE 2
+	int mode;
+#define MODE_FREE 0
+#define MODE_BOARD_SETUP 1
+#define MODE_PLAYING 2
 };
 
 static GdkColor black;
@@ -477,10 +481,14 @@ static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 					ui->holding->y = invert((ui->mousey - 10 - ui->ydim / 12.0) / (ui->ydim / 12.0));
 					ui->holding->x = (ui->mousex - 10 - (ui->xdim / (12.0 * ui->piece_box_open))) /
 							(ui->xdim / (12.0 * ui->piece_box_open));
-					ui->holding->prevx = ui->holding->pickedx;
-					ui->holding->prevy = ui->holding->pickedy;
-					ui->holding->pickedx = ui->holding->x;
-					ui->holding->pickedy = ui->holding->y;
+					if (ui->mode == MODE_PLAYING) {
+						ui->holding->prevx = ui->holding->pickedx;
+						ui->holding->prevy = ui->holding->pickedy;
+						ui->holding->pickedx = ui->holding->x;
+						ui->holding->pickedy = ui->holding->y;
+					} else {
+						ui->holding->prevx = -1;
+					}
 					ui->holding = NULL;
 					gtk_widget_queue_draw(w);
 				}
@@ -499,6 +507,38 @@ static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 		gtk_widget_queue_draw(ui->drawing_area);
 	}
 	return TRUE;
+}
+
+static void mode_cb(GtkEntry *entry, gpointer data)
+{
+	struct gui *ui = data;
+	gchar *ctext;
+	
+	ctext = gtk_combo_box_get_active_text(GTK_COMBO_BOX(ui->mode_combo_box));
+	if (strcmp(ctext, "Free form") == 0) {
+		ui->mode = MODE_FREE;
+		return;
+	}
+	if (strcmp(ctext, "Board Setup") == 0) {
+		ui->mode = MODE_BOARD_SETUP;
+		return;
+	}
+	if (strcmp(ctext, "Play Game") == 0) {
+		if (ui->mode != MODE_PLAYING) {
+			int i;
+
+			for (i = 0; p1[i].name; i++) {
+				p1[i].pickedx = p1[i].x;
+				p1[i].pickedy = p1[i].y;
+			}
+			for (i = 0; p2[i].name; i++) {
+				p2[i].pickedx = p2[i].x;
+				p2[i].pickedy = p2[i].y;
+			}
+		}
+		ui->mode = MODE_PLAYING;
+	}
+	gtk_widget_queue_draw(ui->drawing_area);
 }
 
 static void redblue_cb(GtkEntry *entry, gpointer data)
@@ -573,9 +613,11 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
         ui->mode_combo_box = gtk_combo_box_new_text();
         gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Free form");
         gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Board Setup");
-        gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Assisted Play");
+        gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Play Game");
         gtk_combo_box_set_active(GTK_COMBO_BOX(ui->mode_combo_box), 0);
         gtk_container_add(GTK_CONTAINER(hbox), ui->mode_combo_box);
+	g_signal_connect(GTK_OBJECT(ui->mode_combo_box), "changed",
+				G_CALLBACK(mode_cb), ui);
 
         ui->redblue_combo_box = gtk_combo_box_new_text();
         gtk_combo_box_append_text(GTK_COMBO_BOX(ui->redblue_combo_box), "Play as Red");
@@ -605,6 +647,7 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 	ui->piece_box_open = 1;
 	ui->holding = NULL;
 	ui->playing_as = PLAYING_AS_RED;
+	ui->mode = MODE_FREE;
 
 	gtk_widget_show_all(ui->window);
 }
