@@ -234,7 +234,7 @@ static void draw_pieces_off_board(cairo_t *cr, struct piece *p, int *initial_cou
 	*initial_count = count;
 }
 
-static int legal_move(struct piece *p, int x, int y)
+static int legal_move(struct gui *ui, struct piece *p, int x, int y)
 {
 	int fromx, fromy, legal;
 
@@ -245,25 +245,41 @@ static int legal_move(struct piece *p, int x, int y)
 	if (x == fromx && y == fromy)
 		return 1;
 
-	switch (p->strength) {
-		case ZFIGHTER:
-		case BFIGHTER:
-			return (abs(fromx - x) == abs(fromy - y) ||
-				(fromx == x) || (fromy == y));
-		case XFIGHTER:
-			return (fromx == x) || (fromy == y);
-		case YFIGHTER:
-			return (abs(fromx - x) == abs(fromy - y));
-		case HOMEPLANET:
-		case ASTEROID:
-			return 0;
-		case WFIGHTER:
-			return ((abs(fromx - x) == 1 && abs(fromy - y) == 2) ||
-				(abs(fromx - x) == 2 && abs(fromy - y) == 1));
-		default:
-			break;
+	if (ui->mode == MODE_PLAYING) {
+		switch (p->strength) {
+			case ZFIGHTER:
+			case BFIGHTER:
+				return (abs(fromx - x) == abs(fromy - y) ||
+					(fromx == x) || (fromy == y));
+			case XFIGHTER:
+				return (fromx == x) || (fromy == y);
+			case YFIGHTER:
+				return (abs(fromx - x) == abs(fromy - y));
+			case HOMEPLANET:
+			case ASTEROID:
+				return 0;
+			case WFIGHTER:
+				return ((abs(fromx - x) == 1 && abs(fromy - y) == 2) ||
+					(abs(fromx - x) == 2 && abs(fromy - y) == 1));
+			default:
+				break;
+		}
+		return 0;
 	}
-	return 0;
+
+	if (ui->mode == MODE_BOARD_SETUP) {
+		if (p->r > 0.9) /* red piece */ 
+			return (y < 5 && ui->playing_as == PLAYING_AS_RED);
+		else
+			return (y >= 5 && ui->playing_as == PLAYING_AS_BLUE);
+	}
+
+	/* must be free mode, anything goes */
+	if (ui->mode == MODE_FREE)
+		return 1;
+
+	/* should not get here. */
+	printf("unknown mode %d\n", ui->mode);
 }
 
 static void highlight_legal_square(cairo_t *cr, struct gui *ui, int x, int y)
@@ -291,12 +307,15 @@ static void highlight_legal_moves(cairo_t *cr, struct gui *ui)
 {
 	int x, y;
 
-	if (ui->holding == NULL || ui->holding->pickedx == -1)
+	if (ui->holding == NULL || ui->mode == MODE_FREE)
+		return;
+
+	if (ui->holding->pickedx == -1 && ui->mode != MODE_BOARD_SETUP)
 		return;
 
 	for (x = 0; x < 10; x++)
 		for (y = 0; y < 10; y++)
-			if (legal_move(ui->holding, x, y))
+			if (legal_move(ui, ui->holding, x, y))
 				highlight_legal_square(cr, ui, x, y);
 }
 
@@ -478,9 +497,14 @@ static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 				    ui->mousey - 10 > ui->ydim / 12.0 &&
 				    ui->mousey - 10 < 11.0 * ui->ydim / 12.0) {
 					/* on the board */
-					ui->holding->y = invert((ui->mousey - 10 - ui->ydim / 12.0) / (ui->ydim / 12.0));
-					ui->holding->x = (ui->mousex - 10 - (ui->xdim / (12.0 * ui->piece_box_open))) /
+					int tmpx, tmpy;
+					tmpy = invert((ui->mousey - 10 - ui->ydim / 12.0) / (ui->ydim / 12.0));
+					tmpx = (ui->mousex - 10 - (ui->xdim / (12.0 * ui->piece_box_open))) /
 							(ui->xdim / (12.0 * ui->piece_box_open));
+					if (!legal_move(ui, ui->holding, tmpx, tmpy))
+						return;
+					ui->holding->y = tmpy;
+					ui->holding->x = tmpx; 
 					if (ui->mode == MODE_PLAYING) {
 						ui->holding->prevx = ui->holding->pickedx;
 						ui->holding->prevy = ui->holding->pickedy;
@@ -611,9 +635,9 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 	hbox = gtk_hbox_new(FALSE, 0);
 	gtk_container_add(GTK_CONTAINER(bottom_align), hbox);
         ui->mode_combo_box = gtk_combo_box_new_text();
-        gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Free form");
         gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Board Setup");
         gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Play Game");
+        gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Free form");
         gtk_combo_box_set_active(GTK_COMBO_BOX(ui->mode_combo_box), 0);
         gtk_container_add(GTK_CONTAINER(hbox), ui->mode_combo_box);
 	g_signal_connect(GTK_OBJECT(ui->mode_combo_box), "changed",
@@ -647,7 +671,7 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 	ui->piece_box_open = 1;
 	ui->holding = NULL;
 	ui->playing_as = PLAYING_AS_RED;
-	ui->mode = MODE_FREE;
+	ui->mode = MODE_BOARD_SETUP;
 
 	gtk_widget_show_all(ui->window);
 }
