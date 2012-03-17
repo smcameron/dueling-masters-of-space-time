@@ -68,6 +68,15 @@ static GdkColor black;
 
 static struct gui ui;
 
+static void invert_clicked(__attribute__((unused)) GtkWidget *widget,
+			__attribute__((unused)) gpointer data)
+{
+	struct gui *ui = data;
+
+	ui->inverted = !ui->inverted;
+	gtk_widget_queue_draw(ui->drawing_area);
+}
+
 static void quit_clicked(__attribute__((unused)) GtkWidget *widget,
 			__attribute__((unused)) gpointer data)
 {
@@ -388,7 +397,7 @@ static int on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 static void init_ui(int *argc, char **argv[], struct gui *ui)
 {
 	GtkWidget *vbox, *scrolled_window, *hbox, *bottom_align,
-			*quit_button;
+			*invert_button, *quit_button;
 
 	if (!g_thread_supported())
 		g_thread_init(NULL);
@@ -441,6 +450,12 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
         gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Assisted Play");
         gtk_combo_box_set_active(GTK_COMBO_BOX(ui->mode_combo_box), 0);
         gtk_container_add(GTK_CONTAINER(hbox), ui->mode_combo_box);
+
+	/* add invert button */
+	invert_button = gtk_button_new_with_label("Invert Board");
+        g_signal_connect(invert_button, "clicked", G_CALLBACK(invert_clicked), ui);
+        gtk_box_pack_start(GTK_BOX(hbox), invert_button, FALSE, FALSE, 3);
+        gtk_widget_set_tooltip_text(invert_button, "Invert Board so that your half is on the bottom");
 
 	/* add Quit button */
 	quit_button = gtk_button_new_with_label("Quit Dueling");
