@@ -1,8 +1,60 @@
 #include <stdlib.h>
+#include <malloc.h>
+#include <math.h>
 
 #include <gtk/gtk.h>
 #include <cairo.h>
 
+#define ARRAYSIZE(x) (sizeof((x)) / sizeof((x)[0]))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+
+struct piece;
+
+void generic_draw_piece(struct piece *p, cairo_t *cr);
+
+struct piece {
+	char *name;
+	char *description;
+	int x, y, prevx, prevy;
+#define UNKNOWN (-1)
+	int strength;
+	void (*draw)(struct piece *p, cairo_t *cr, double x, double y);
+	double sx, sy;
+	double r,g,b;
+} full_set[] = {
+	{ "W", "W fighter.  Moves like chess knight.  Strongest piece.",
+			-1, -1, -1, -1, 6, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+	{ "B", "B fighter.  Moves like chess queen.  Only W is stronger.",
+			-1, -1, -1, -1, 5, generic_draw_piece, -1, -1 , 1.0, 0.3, 0.3},
+	{ "X1", "X1 fighter.  Moves like chess rook.  W and B are stronger",
+			-1, -1, -1, -1, 4, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+	{ "X2", "X2 fighter.  Moves like chess rook.  W and B are stronger",
+			-1, -1, -1, -1, 4, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+	{ "Y1", "Y1 fighter.  Moves like chess bishop.  W, X, and B are stronger",
+			-1, -1, -1, -1, 3, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+	{ "Y2", "Y2 fighter.  Moves like chess bishop.  W, X, and B are stronger",
+			-1, -1, -1, -1, 3, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+	{ "Z1", "Z1 fighter.  Moves like chess queen.  Weakest mobile piece",
+			-1, -1, -1, -1, 2, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+	{ "Z2", "Z2 fighter.  Moves like chess queen.  Weakest mobile piece",
+			-1, -1, -1, -1, 2, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+	{ "Z3", "Z3 fighter.  Moves like chess queen.  Weakest mobile piece",
+			-1, -1, -1, -1, 2, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+	{ "Z4", "Z4 fighter.  Moves like chess queen.  Weakest mobile piece",
+			-1, -1, -1, -1, 2, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+	{ "A", "Asteroid", -1, -1, -1, -1, 1, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+	{ "HP", "Home Planet", -1, -1, -1, -1, 0, generic_draw_piece, -1, -1, 1.0, 0.3, 0.3 },
+	{ NULL, NULL, 0, 0, 0, 0, 0, NULL, 0, 0, 1.0, 0.3, 0.3 },
+};
+
+struct piece *p1, *p2;
+	
 struct gui {
 	GtkWidget *window;
 	GtkWidget *drawing_area;
@@ -76,6 +128,19 @@ static inline void draw_left_justified_text(cairo_t *cr,
 	draw_aligned_text(cr, x, y, fontsize, text, LEFT_JUSTIFIED);
 }
 
+static void draw_pieces(cairo_t *cr, struct piece *p)
+{
+	int i;
+
+	for (i = 0; p[i].name != NULL; i++) {
+		if (p[i].x == UNKNOWN)
+			continue;
+		p[i].sx = p[i].x * ui.xdim / 12.0 + 1.5 * (ui.xdim / 12.0);
+		p[i].sy = p[i].y * ui.ydim / 12.0 + 1.5 * (ui.ydim / 12.0);
+		generic_draw_piece(&p[i], cr);
+	}
+}
+
 static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 {
 	struct gui *ui = p;
@@ -105,6 +170,7 @@ static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 	cairo_paint_with_alpha(cr, 0.7);
 	cairo_restore(cr);
 
+	cairo_save(cr);
 	cairo_set_dash(cr, dash, 2, 2.0);
 	// cairo_set_line_width(cr, 0.5);
 	cairo_set_source_rgb (cr, 0.5, 1, 0.5);
@@ -121,14 +187,19 @@ static int on_expose_drawing_area(GtkWidget *w, GdkEvent *event, gpointer p)
 		y = (i + 1.5) * ui->ydim / 12.0;
 		if (ui->inverted)
 			y = ui->ydim - y; 
-		draw_centered_text(cr, ui->xdim / 24.0, y, 30.0, letter);
+		draw_centered_text(cr, ui->xdim / 24.0, y, ui->ydim / 30.0, letter);
 	}
 	for (i = 0; i < 10; i++) {
 		char number[2];
 		sprintf(number, "%d", i + 1);
-		draw_centered_text(cr, (i + 1.5) * ui->xdim / 12.0, ui->ydim / 24.0, 30.0, number);
+		draw_centered_text(cr, (i + 1.5) * ui->xdim / 12.0, ui->ydim / 24.0, ui->xdim / 30.0, number);
 	}
 	cairo_stroke(cr);
+	cairo_restore(cr);
+
+	draw_pieces(cr, p1);
+	draw_pieces(cr, p2);
+
 	cairo_destroy(cr);
 }
 
@@ -177,9 +248,60 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 	gtk_widget_show_all(ui->window);
 }
 
+void generic_draw_piece(struct piece *p, cairo_t *cr)
+{
+	double radius;
+
+	if (ui.xdim < ui.ydim)
+		radius = (0.75 * ui.xdim / 12.0) / 2.0;
+	else
+		radius = (0.75 * ui.ydim / 12.0) / 2.0;
+
+	cairo_save(cr);
+	cairo_arc(cr, p->sx, p->sy, radius, 0.0, 2.0 * M_PI); // full circle
+	cairo_set_source_rgba(cr, p->r, p->g, p->b, 0.25);    // partially translucent
+	cairo_fill_preserve(cr);
+	cairo_stroke(cr);
+	cairo_restore(cr);
+	cairo_save(cr);
+	cairo_set_line_width (cr, MIN(ui.xdim, ui.ydim) / 200.0);
+	cairo_set_source_rgba(cr, p->r, p->g, p->b, 1.0);    // partially translucent
+	cairo_arc(cr, p->sx, p->sy, radius * 1.1, 0.0, 2.0 * M_PI); // full circle
+	cairo_stroke(cr);
+	cairo_restore(cr);  // back to opaque black
+	cairo_save(cr);
+	cairo_set_source_rgba(cr, p->r, p->g, p->b, 1.0);    // partially translucent
+	draw_centered_text(cr, p->sx, p->sy, MIN(ui.xdim, ui.ydim) / 32.0, p->name);
+	cairo_stroke(cr);
+	cairo_restore(cr);  // back to opaque black
+}
+
+
+static void init_pieces(struct piece **p1, struct piece **p2)
+{
+	int i;
+
+	*p1 = malloc(sizeof(full_set));
+	*p2 = malloc(sizeof(full_set));
+	memcpy(*p1, full_set, sizeof(full_set));
+	memcpy(*p2, full_set, sizeof(full_set));
+
+	/* Make player 2's pieces blue */
+	for (i = 0; i < ARRAYSIZE(full_set); i++) {
+		(*p2)[i].r = 0.3;
+		(*p2)[i].g = 0.3;
+		(*p2)[i].b = 1.0;
+	}
+	(*p1)[0].x = 0;
+	(*p1)[0].y = 0;
+	(*p2)[0].x = 9;
+	(*p2)[0].y = 9;
+}
+
 int main(int argc, char *argv[])
 {
 	init_ui(&argc, &argv, &ui);
+	init_pieces(&p1, &p2);
 
 	gdk_threads_enter();
 	gtk_main();
