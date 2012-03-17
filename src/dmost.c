@@ -690,7 +690,9 @@ void generic_draw_piece_on_board(struct piece *p, cairo_t *cr)
 		radius = (0.75 * ui.ydim / 12.0) / 2.0;
 
 	/* draw trail */
-	if (p->prevx != -1) {
+	if (p->prevx != -1 && 
+		((ui.playing_as == PLAYING_AS_RED && p->r > 0.9) ||
+		(ui.playing_as == PLAYING_AS_BLUE && p->b > 0.9))) {
 		cairo_save(cr);
 		cairo_set_line_cap (cr, CAIRO_LINE_CAP_ROUND);
 		cairo_set_line_width (cr, MIN(ui.xdim / ui.piece_box_open, ui.ydim) / 64.0);
