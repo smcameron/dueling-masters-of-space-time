@@ -160,9 +160,16 @@ void generic_draw_piece_off_board(struct piece *p, cairo_t *cr, double radius)
 	cairo_stroke(cr);
 	cairo_restore(cr);  // back to opaque black
 	cairo_save(cr);
+#if 0
 	cairo_set_source_rgba(cr, p->r, p->g, p->b, 1.0);    // partially translucent
 	if (radius > 15.0)
 		draw_centered_text(cr, p->sx, p->sy, MIN(ui.xdim, ui.ydim) / 32.0, p->name);
+#endif
+	cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 1.0);
+	if (radius > 15.0 && radius < 23.0)
+		draw_centered_text(cr, p->sx, p->sy, MIN(ui.xdim, ui.ydim) / 32.0, p->name);
+	if (radius > 23.0)
+		draw_centered_text(cr, p->sx, p->sy, MIN(ui.xdim, ui.ydim) / 20.0, p->name);
 	cairo_stroke(cr);
 	cairo_restore(cr);  // back to opaque black
 }
@@ -446,8 +453,14 @@ void generic_draw_piece_on_board(struct piece *p, cairo_t *cr)
 	cairo_stroke(cr);
 	cairo_restore(cr);  // back to opaque black
 	cairo_save(cr);
+#if 0
 	cairo_set_source_rgba(cr, p->r, p->g, p->b, 1.0);    // partially translucent
 	draw_centered_text(cr, p->sx, p->sy, MIN(ui.xdim, ui.ydim) / 32.0, p->name);
+	cairo_stroke(cr);
+#endif
+	cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 1.0);
+	if (radius > 15.0)
+		draw_centered_text(cr, p->sx, p->sy, MIN(ui.xdim, ui.ydim) / 32.0, p->name);
 	cairo_stroke(cr);
 	cairo_restore(cr);  // back to opaque black
 }
