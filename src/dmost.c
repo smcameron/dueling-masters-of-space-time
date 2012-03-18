@@ -662,7 +662,6 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 	ui->ydim = 300;
         gtk_widget_set_size_request(GTK_WIDGET(ui->drawing_area), ui->xdim, ui->ydim);
         gtk_widget_modify_bg(ui->drawing_area, GTK_STATE_NORMAL, &black);
-        gtk_container_add(GTK_CONTAINER(vbox), ui->drawing_area);
         g_signal_connect(G_OBJECT(ui->drawing_area), "expose_event",
 			G_CALLBACK(on_expose_drawing_area), ui);
         g_signal_connect(G_OBJECT(ui->drawing_area), "configure_event",
@@ -717,6 +716,7 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
         gtk_widget_set_tooltip_text(quit_button, "Quit Dueling");
 
 	gtk_box_pack_start(GTK_BOX(vbox), bottom_align, FALSE, FALSE, 0);
+        gtk_container_add(GTK_CONTAINER(vbox), ui->drawing_area);
 
 	ui->inverted = 1;
 	ui->piece_box_open = 1;
