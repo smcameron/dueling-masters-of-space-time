@@ -87,6 +87,7 @@ struct piece *p1, *p2;
 	
 struct gui {
 	GtkWidget *window;
+	GtkWidget *help;
 	GtkWidget *hbox;
 	GtkWidget *drawing_area;
 	GtkWidget *mode_combo_box;
@@ -119,6 +120,21 @@ static void invert_clicked(__attribute__((unused)) GtkWidget *widget,
 
 	ui->inverted = !ui->inverted;
 	gtk_widget_queue_draw(ui->drawing_area);
+}
+
+static void help_clicked(__attribute__((unused)) GtkWidget *widget,
+			gpointer data)
+{
+	struct gui *ui = data;
+	
+	gtk_widget_show_all(ui->help);
+}
+
+static void close_help_clicked(GtkWidget *widget, gpointer data)
+{
+	struct gui *ui = data;
+	
+	gtk_widget_hide(widget);
 }
 
 static void quit_clicked(__attribute__((unused)) GtkWidget *widget,
@@ -708,10 +724,78 @@ static void redblue_cb(GtkEntry *entry, gpointer data)
 	gtk_widget_queue_draw(ui->drawing_area);
 }
 
+static void setup_help_window(struct gui *ui)
+{
+	GtkWidget *vbox, *view, *scrolled_window;
+	GtkTextBuffer *buffer;
+	GtkTextIter start, end;
+	GtkTextIter iter;
+	static char *instructions =
+"   Instructions\n"
+"   \n"
+"   1. Establish communication with your opponent outside the gaem.\n"
+"      This can be as simple as sitting across the table from them\n"
+"      or talking to them on the phone, IRC, Skype, Google Hangouts,\n"
+"      etc.\n"
+"   \n"
+"   2. Decide who will go first, and who will play as Red and who will\n"
+"      play as Blue.  Select 'Play as Red' or 'Play as Blue' at the top\n"
+"      of the window.\n"
+"   \n"
+"   3. Arrange your pieces on your half of the board.\n"
+"   \n"
+"   4. When all your pieces are arranged, select 'Play Game' from the top\n"
+"      left of the menu at the top of the window.\n"
+"   \n"
+"   5. When it is your turn, select the piece you want to move (left click\n"
+"      on it withe the mouse) and move it where you like.  Announce to your\n"
+"      opponent (via the communications channel established in step 1) which\n"
+"      piece you are moving, and where your are moving the piece FROM.  Do\n"
+"      NOT REVEAL where you are moving the piece TO.\n"
+"\n"
+"   6. When it is your opponent's turn, he will announce to you that he has\n"
+"      moved a certain one of his pieces from a certain location on the board.\n"
+"      If this is the first time he has moved this piece, simply place it on the\n"
+"      board in the location your opponent indicates.  If this is not the first\n"
+"      time the piece has been moved, the piece will already be on the board.  In\n"
+"      that case, check to see if the piece passes through any of your pieces. If\n"
+"      So, there is a collision.  The stronger piece destroys the weaker piece.\n"
+"      The pieces are, in order from strongest to weakest: A, W, B, X, Y, Z, HP.\n"
+"      Asteroids destroy anything which touches them, and are destroyed by anythnig\n"
+"      that touches them (think of them as mines).   In the event of a collision,\n"
+"      when you tell your opponent that he has encountered one of your pieces, your\n"
+"      opponent will check to see if your piece made it to the location you say it's\n"
+"      at.  You may find that, in turn, your piece has also been destroyed elsewhere.\n"
+"      This collision resolution is carried out recursively until there are no more\n"
+"      collisions."
+"\n"
+"   7. The game is over one either player destroys the other player's Home Planet\n"
+"      or when it is determined that neither player can destroy the other's Home\n"
+"      planet (due to having too few pieces, or for example, only Y fighters which\n"
+"      are on the wrong squares to reach the Home Planet (since they travel diagonally\n"
+"      a single Y fighter can only reach half the squares on the board.)\n"
+"   \n";
+
+	scrolled_window = gtk_scrolled_window_new(NULL, NULL);
+	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled_window),
+			GTK_POLICY_ALWAYS, GTK_POLICY_ALWAYS);
+	ui->help = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+	g_signal_connect(ui->help, "delete-event", G_CALLBACK(close_help_clicked), ui);
+	g_signal_connect(ui->help, "destroy", G_CALLBACK(close_help_clicked), ui);
+	vbox = gtk_vbox_new(FALSE, 0);
+	view = gtk_text_view_new();
+	buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(view));
+	gtk_text_buffer_get_iter_at_offset(buffer, &iter, 0);
+	gtk_text_buffer_insert(buffer, &iter, instructions, -1);
+	gtk_scrolled_window_add_with_viewport(GTK_CONTAINER(scrolled_window), view);
+	gtk_box_pack_start(GTK_BOX(vbox), scrolled_window, TRUE, TRUE, 0);
+	gtk_container_add(GTK_CONTAINER(ui->help), vbox);
+}
+
 static void init_ui(int *argc, char **argv[], struct gui *ui)
 {
 	GtkWidget *vbox, *scrolled_window, *hbox, *bottom_align,
-			*invert_button, *quit_button;
+			*invert_button, *quit_button, *help_button;
 
 	if (!g_thread_supported())
 		g_thread_init(NULL);
@@ -786,11 +870,17 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
         gtk_box_pack_start(GTK_BOX(hbox), invert_button, FALSE, FALSE, 3);
         gtk_widget_set_tooltip_text(invert_button, "Invert Board so that your half is on the bottom");
 
+	/* add Help button */
+	help_button = gtk_button_new_with_label("Help");
+        g_signal_connect(help_button, "clicked", G_CALLBACK(help_clicked), ui);
+        gtk_box_pack_start(GTK_BOX(hbox), help_button, FALSE, FALSE, 3);
+
 	/* add Quit button */
 	quit_button = gtk_button_new_with_label("Quit Dueling");
         g_signal_connect(quit_button, "clicked", G_CALLBACK(quit_clicked), NULL);
         gtk_box_pack_start(GTK_BOX(hbox), quit_button, FALSE, FALSE, 3);
         gtk_widget_set_tooltip_text(quit_button, "Quit Dueling");
+
 
 	gtk_box_pack_start(GTK_BOX(vbox), bottom_align, FALSE, FALSE, 0);
         gtk_container_add(GTK_CONTAINER(vbox), ui->drawing_area);
@@ -803,6 +893,8 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 	ui->fullscreen = 0;
 	ui->mode = MODE_BOARD_SETUP;
 	memset(ui->visited, 0, sizeof(ui->visited));
+
+	setup_help_window(ui);
 
 	gtk_widget_show_all(ui->window);
 }
