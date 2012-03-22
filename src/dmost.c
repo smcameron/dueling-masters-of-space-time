@@ -66,6 +66,7 @@ struct piece *p1, *p2;
 	
 struct gui {
 	GtkWidget *window;
+	GtkWidget *hbox;
 	GtkWidget *drawing_area;
 	GtkWidget *mode_combo_box;
 	GtkWidget *redblue_combo_box;
@@ -75,6 +76,7 @@ struct gui {
 	int mousex, mousey;
 	struct piece *holding;
 	int playing_as;
+	int buttons_showing;
 #define PLAYING_AS_RED 1
 #define PLAYING_AS_BLUE 2
 	int mode;
@@ -454,6 +456,21 @@ static int on_mouse_motion(GtkWidget *w, GdkEvent *event, gpointer p)
 	if (e) {
 		ui->mousex = e->x;
 		ui->mousey = e->y;
+
+		/* Hide or show buttons depending on if mouse is near top of screen */
+		if (ui->mousey < ui->ydim / 15.0 && !ui->buttons_showing) {
+			gtk_widget_show_all(ui->hbox);
+			ui->buttons_showing = 1;
+			gtk_widget_queue_draw(ui->window);
+		} else {
+			if (ui->mousey > ui->ydim / 15.0 && ui->buttons_showing) {
+				gtk_widget_hide(ui->hbox);
+				ui->buttons_showing = 0;
+				gtk_widget_queue_draw(ui->window);
+			}
+		}
+			
+
 		if (ui->piece_box_open > 1.0 && ui->mousex < ui->xdim / 2.2) {
 			gtk_widget_queue_draw(w);
 			ui->piece_box_open *= 0.8;
@@ -683,6 +700,7 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
          */
 	bottom_align = gtk_alignment_new(0, 1, 1, 0);
 	hbox = gtk_hbox_new(FALSE, 0);
+	ui->hbox = hbox;
 	gtk_container_add(GTK_CONTAINER(bottom_align), hbox);
         ui->mode_combo_box = gtk_combo_box_new_text();
         gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Board Setup");
@@ -722,6 +740,7 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 	ui->piece_box_open = 1;
 	ui->holding = NULL;
 	ui->playing_as = PLAYING_AS_RED;
+	ui->buttons_showing = 1;
 	ui->mode = MODE_BOARD_SETUP;
 	memset(ui->visited, 0, sizeof(ui->visited));
 
