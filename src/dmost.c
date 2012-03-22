@@ -5,6 +5,7 @@
 
 #include <gtk/gtk.h>
 #include <cairo.h>
+#include <gdk/gdkkeysyms.h>
 
 #define ARRAYSIZE(x) (sizeof((x)) / sizeof((x)[0]))
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
@@ -77,6 +78,7 @@ struct gui {
 	struct piece *holding;
 	int playing_as;
 	int buttons_showing;
+	int fullscreen;
 #define PLAYING_AS_RED 1
 #define PLAYING_AS_BLUE 2
 	int mode;
@@ -103,6 +105,26 @@ static void quit_clicked(__attribute__((unused)) GtkWidget *widget,
 			__attribute__((unused)) gpointer data)
 {
 	gtk_main_quit();
+}
+
+static gint key_press_cb(GtkWidget* widget, GdkEventKey* event, gpointer data)
+{
+	struct gui *ui = data;
+
+	switch (event->keyval) {
+		case GDK_F11:
+			if (ui->fullscreen) {
+				ui->fullscreen = 0;
+				gtk_window_unfullscreen(GTK_WINDOW(ui->window));
+			} else {
+				ui->fullscreen = 1;
+				gtk_window_fullscreen(GTK_WINDOW(ui->window));
+			}
+			break;
+		default:
+			break;
+	}
+	return TRUE;
 }
 
 static void draw_aligned_text(cairo_t *cr, double x, double y,
@@ -671,6 +693,9 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 
 	g_signal_connect(ui->window, "delete-event", G_CALLBACK(quit_clicked), NULL);
 	g_signal_connect(ui->window, "destroy", G_CALLBACK(quit_clicked), NULL);
+	g_signal_connect(G_OBJECT(ui->window), "key_press_event",
+			G_CALLBACK(key_press_cb), ui);
+
 
 	vbox = gtk_vbox_new(FALSE, 0);
 	gtk_container_add(GTK_CONTAINER(ui->window), vbox);
@@ -741,6 +766,7 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 	ui->holding = NULL;
 	ui->playing_as = PLAYING_AS_RED;
 	ui->buttons_showing = 1;
+	ui->fullscreen = 0;
 	ui->mode = MODE_BOARD_SETUP;
 	memset(ui->visited, 0, sizeof(ui->visited));
 
