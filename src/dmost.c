@@ -470,46 +470,60 @@ static gint on_config_drawing_area(GtkWidget *w, GdkEventConfigure *event,
 	ui->ydim = w->allocation.height;
 }
 
+static void hide_or_show_buttons(struct gui *ui)
+{
+	/* Hide or show buttons depending on if mouse is near top of screen */
+	if (ui->mousey < ui->ydim / 15.0 && !ui->buttons_showing) {
+		gtk_widget_show_all(ui->hbox);
+		ui->buttons_showing = 1;
+		gtk_widget_queue_draw(ui->window);
+		return;
+	}
+	if (ui->mousey > ui->ydim / 15.0 && ui->buttons_showing) {
+		gtk_widget_hide(ui->hbox);
+		ui->buttons_showing = 0;
+		gtk_widget_queue_draw(ui->window);
+	}
+}
+
+static hide_or_show_piecebox(struct gui *ui, GtkWidget *w)
+{
+	if (ui->mode == MODE_BOARD_SETUP) {
+		ui->piece_box_open = 2.0;
+		return;
+	}
+	if (ui->piece_box_open > 1.0 && ui->mousex < ui->xdim / 2.2) {
+		gtk_widget_queue_draw(w);
+		ui->piece_box_open *= 0.8;
+			if (ui->piece_box_open < 1.0)
+			ui->piece_box_open = 1.0;
+	} else {
+		if (ui->mousex > 11.0 * (ui->xdim / (12.0 * ui->piece_box_open)) &&
+					ui->piece_box_open < 2.0) {
+			ui->piece_box_open *= 1.2;
+			gtk_widget_queue_draw(w);
+			if (ui->piece_box_open > 2.0)
+				ui->piece_box_open = 2.0;
+		}
+	}
+}
+
 static int on_mouse_motion(GtkWidget *w, GdkEvent *event, gpointer p)
 {
 	struct gui *ui = p;
 	GdkEventMotion *e = (GdkEventMotion *) event;
 
-	if (e) {
-		ui->mousex = e->x;
-		ui->mousey = e->y;
+	if (!e)
+		return TRUE;
 
-		/* Hide or show buttons depending on if mouse is near top of screen */
-		if (ui->mousey < ui->ydim / 15.0 && !ui->buttons_showing) {
-			gtk_widget_show_all(ui->hbox);
-			ui->buttons_showing = 1;
-			gtk_widget_queue_draw(ui->window);
-		} else {
-			if (ui->mousey > ui->ydim / 15.0 && ui->buttons_showing) {
-				gtk_widget_hide(ui->hbox);
-				ui->buttons_showing = 0;
-				gtk_widget_queue_draw(ui->window);
-			}
-		}
-			
+	ui->mousex = e->x;
+	ui->mousey = e->y;
 
-		if (ui->piece_box_open > 1.0 && ui->mousex < ui->xdim / 2.2) {
-			gtk_widget_queue_draw(w);
-			ui->piece_box_open *= 0.8;
-			if (ui->piece_box_open < 1.0)
-				ui->piece_box_open = 1.0;
-		} else {
-			if (ui->mousex > 11.0 * (ui->xdim / (12.0 * ui->piece_box_open)) &&
-						ui->piece_box_open < 2.0) {
-				ui->piece_box_open *= 1.2;
-				gtk_widget_queue_draw(w);
-				if (ui->piece_box_open > 2.0)
-					ui->piece_box_open = 2.0;
-			}
-		}
-		if (ui->holding)
-			gtk_widget_queue_draw(w);
-	}
+	hide_or_show_buttons(ui);
+	hide_or_show_piecebox(ui, w);
+	if (ui->holding)
+		gtk_widget_queue_draw(w);
+
 	return TRUE;
 }
 
