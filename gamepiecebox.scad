@@ -1,13 +1,13 @@
 
 diameter = 25.4;
-diameter_slop = 7;
+diameter_slop = 3;
 height = 4;
-height_slop = 0.25;
+height_slop = 0.35;
 ncolumns = 4;
 nrows = 12;
 extra_height = 5;
-extra_depth = 10;
-extra_width = 10;
+extra_depth = 6;
+extra_width = 6;
 
 module box_hole(i)
 {
@@ -19,11 +19,11 @@ module box_hole(i)
 			0]) { 
 		translate(v = [0, 0, diameter * 1.25])
 		cube(size = [hole_width,
-				nrows * (height + height_slop),
+				1.07 * nrows * (height + height_slop),
 				diameter / 2 + extra_height], center = true);
 		translate(v = [0, 0, 1.8 * diameter / 2])
 		rotate(a = 90, v = [1, 0, 0])
-			cylinder(h = nrows * (height + height_slop),
+			cylinder(h = 1.07 * nrows * (height + height_slop),
 				r1 = (diameter + diameter_slop / 2) / 2,
 				r2 = (diameter + diameter_slop / 2) / 2,
 				// r2 = (diameter + diameter_slop / 2) / 2,
