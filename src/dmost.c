@@ -19,7 +19,9 @@
     
  */ 
 #include <stdlib.h>
+#ifndef __APPLE__
 #include <malloc.h>
+#endif
 #include <math.h>
 #include <stdint.h>
 
