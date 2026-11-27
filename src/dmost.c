@@ -127,6 +127,7 @@ struct gui {
 	GtkWidget *auto_setup_button;
 	GtkWidget *new_game_button;
 	GtkWidget *pass_button;
+	GtkWidget *play_again_button;
 	GtkWidget *status_label;
 	GtkWidget *collision_label;
 	GtkWidget *log_view;
@@ -303,6 +304,8 @@ static void on_game_over_dialog_response(GtkDialog *dialog, gint response_id,
 	gtk_widget_destroy(GTK_WIDGET(dialog));
 	if (response_id == GTK_RESPONSE_ACCEPT)
 		reset_managed_game(ui);
+	else if (ui->drawing_area != NULL)
+		gtk_widget_queue_draw(ui->drawing_area);
 }
 
 static gboolean show_game_over_dialog_cb(gpointer data)
@@ -371,6 +374,8 @@ static gboolean show_game_over_dialog_cb(gpointer data)
 			 G_CALLBACK(on_game_over_dialog_response), ui);
 	ui->game_over_dialog = dlg;
 	gtk_widget_show_all(dlg);
+	if (ui->drawing_area != NULL)
+		gtk_widget_queue_draw(ui->drawing_area);
 	return FALSE;
 }
 
@@ -712,6 +717,8 @@ static void update_status(struct gui *ui)
 		gtk_label_set_text(GTK_LABEL(ui->status_label), msg);
 		gtk_widget_set_sensitive(ui->auto_setup_button, FALSE);
 		gtk_widget_set_sensitive(ui->pass_button, FALSE);
+		if (ui->play_again_button != NULL)
+			gtk_widget_hide(ui->play_again_button);
 		return;
 	}
 
@@ -720,6 +727,8 @@ static void update_status(struct gui *ui)
 				   "Free-form mode (vs Computer paused)");
 		gtk_widget_set_sensitive(ui->auto_setup_button, FALSE);
 		gtk_widget_set_sensitive(ui->pass_button, FALSE);
+		if (ui->play_again_button != NULL)
+			gtk_widget_hide(ui->play_again_button);
 		return;
 	}
 
@@ -777,6 +786,12 @@ static void update_status(struct gui *ui)
 	}
 
 	gtk_label_set_text(GTK_LABEL(ui->status_label), msg);
+	if (ui->play_again_button != NULL) {
+		if (ui->board.phase == PHASE_GAME_OVER)
+			gtk_widget_show(ui->play_again_button);
+		else
+			gtk_widget_hide(ui->play_again_button);
+	}
 	if (ui->collision_label != NULL) {
 		if (ui->last_collision_text[0] != '\0') {
 			gchar *markup = g_markup_printf_escaped(
@@ -1773,19 +1788,21 @@ static void draw_active_animation(cairo_t *cr, struct gui *ui)
 
 static void draw_game_over_banner(cairo_t *cr, struct gui *ui)
 {
+	double cell_h = ui->ydim / 12.0;
 	double board_w = 10.0 * ui->xdim / (12.0 * ui->piece_box_open);
 	double left_x = ui->xdim / (12.0 * ui->piece_box_open);
 	double cx = left_x + board_w * 0.5;
-	double cy = ui->ydim * 0.5;
-	double bw = board_w * 0.84;
-	double bh = ui->ydim * 0.16;
+	double top_y = 11.08 * cell_h;
+	double bh = 0.84 * cell_h;
+	double cy = top_y + bh * 0.5;
 	double br = 0.7, bg = 0.7, bb = 0.8;
 	const char *headline = "GAME OVER";
 	const char *subline = "";
+	char full_text[160];
 	int human_won;
 
 	if (!is_managed_mode(ui) || ui->board.phase != PHASE_GAME_OVER ||
-	    ui->anim_count > 0)
+	    ui->anim_count > 0 || ui->game_over_dialog != NULL)
 		return;
 
 	human_won = ((ui->board.side == SIDE_RED &&
@@ -1805,30 +1822,29 @@ static void draw_game_over_banner(cairo_t *cr, struct gui *ui)
 		bb = 0.45;
 		headline = (ui->board.result == RESULT_RED_WINS) ?
 			   "VICTORY! RED WINS!" : "VICTORY! BLUE WINS!";
-		subline = "Opponent's Home Planet destroyed!";
+		subline = "Opponent's Home Planet destroyed";
 	} else {
 		br = 1.0;
 		bg = 0.30;
 		bb = 0.25;
 		headline = (ui->board.result == RESULT_RED_WINS) ?
 			   "DEFEAT — RED WINS" : "DEFEAT — BLUE WINS";
-		subline = "Your Home Planet was destroyed!";
+		subline = "Your Home Planet was destroyed";
 	}
 
+	snprintf(full_text, sizeof(full_text), "%s  (%s)", headline, subline);
+
 	cairo_save(cr);
-	cairo_set_source_rgba(cr, 0.05, 0.05, 0.10, 0.82);
-	cairo_rectangle(cr, cx - bw * 0.5, cy - bh * 0.5, bw, bh);
+	cairo_set_source_rgba(cr, 0.05, 0.05, 0.10, 0.88);
+	cairo_rectangle(cr, left_x, top_y, board_w, bh);
 	cairo_fill_preserve(cr);
-	cairo_set_line_width(cr, 3.0);
+	cairo_set_line_width(cr, 2.5);
 	cairo_set_source_rgba(cr, br, bg, bb, 0.95);
 	cairo_stroke(cr);
 
 	cairo_set_source_rgba(cr, br, bg, bb, 1.0);
-	draw_centered_text(cr, cx, cy - bh * 0.16,
-			   MIN(board_w, ui->ydim) / 17.0, headline);
-	cairo_set_source_rgba(cr, 0.95, 0.95, 0.98, 0.95);
-	draw_centered_text(cr, cx, cy + bh * 0.20,
-			   MIN(board_w, ui->ydim) / 30.0, subline);
+	draw_centered_text(cr, cx, cy, MIN(board_w / 28.0, bh * 0.46),
+			   full_text);
 	cairo_restore(cr);
 }
 
@@ -2211,6 +2227,12 @@ static void mode_cb(__attribute__((unused)) GtkComboBox *combo, gpointer data)
 
 	ui->holding = NULL;
 
+	if (strcmp(ctext, "Begin New Game") == 0) {
+		g_free(ctext);
+		reset_managed_game(ui);
+		return;
+	}
+
 	if (strcmp(ctext, "Free form") == 0) {
 		ui->mode = MODE_FREE;
 		update_status(ui);
@@ -2399,6 +2421,7 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 	gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Board Setup");
 	gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Play Game");
 	gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Free form");
+	gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Begin New Game");
 	gtk_combo_box_set_active(GTK_COMBO_BOX(ui->mode_combo_box), 0);
 	gtk_box_pack_start(GTK_BOX(hbox), ui->mode_combo_box, FALSE, FALSE, 2);
 	g_signal_connect(G_OBJECT(ui->mode_combo_box), "changed",
@@ -2433,12 +2456,12 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 	gtk_widget_set_tooltip_text(ui->auto_setup_button,
 				    "Randomly arrange your pieces in a sensible formation");
 
-	ui->new_game_button = gtk_button_new_with_label("New Game");
+	ui->new_game_button = gtk_button_new_with_label("Begin New Game");
 	g_signal_connect(ui->new_game_button, "clicked",
 			 G_CALLBACK(new_game_clicked), ui);
 	gtk_box_pack_start(GTK_BOX(hbox), ui->new_game_button, FALSE, FALSE, 2);
 	gtk_widget_set_tooltip_text(ui->new_game_button,
-				    "Reset and start a new game");
+				    "Reset and begin a new game");
 
 	invert_button = gtk_button_new_with_label("Invert Board");
 	g_signal_connect(invert_button, "clicked",
@@ -2491,6 +2514,12 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 			 G_CALLBACK(pass_clicked), ui);
 	gtk_widget_set_sensitive(ui->pass_button, FALSE);
 	gtk_box_pack_end(GTK_BOX(bottom_hbox), ui->pass_button, FALSE, FALSE, 6);
+
+	ui->play_again_button = gtk_button_new_with_label("Begin New Game");
+	g_signal_connect(ui->play_again_button, "clicked",
+			 G_CALLBACK(new_game_clicked), ui);
+	gtk_box_pack_end(GTK_BOX(bottom_hbox), ui->play_again_button,
+			 FALSE, FALSE, 4);
 	gtk_box_pack_start(GTK_BOX(vbox), bottom_hbox, FALSE, FALSE, 2);
 
 	/* Collision banner above combat log */
@@ -2534,6 +2563,7 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 
 	setup_help_window(ui);
 	gtk_widget_show_all(ui->window);
+	gtk_widget_hide(ui->play_again_button);
 }
 
 static void generic_draw_piece_on_board(struct piece *p, cairo_t *cr,
