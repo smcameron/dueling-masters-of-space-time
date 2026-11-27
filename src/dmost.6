@@ -3,12 +3,11 @@
 dmost \- Dueling Masters of Space Time
 .SH SYNOPSIS
 .B dmost
-.RI [ GTK+\ options ]
 .SH DESCRIPTION
 .PP
 Dueling Masters of Space Time is a two-player turn-based strategy board game
 that could be described as a cross between chess, Battleship, and Stratego.
-This GTK+ application allows you to play against a built-in computer opponent
+This SDL2 application allows you to play against a built-in computer opponent
 (the default) or offline against a human opponent.
 .PP
 Each player has a representation of the board, which consists of a 10x10 grid
@@ -154,7 +153,7 @@ Game Over).
 Flips the board vertically so your half can be viewed at the bottom or top.
 .TP
 .B Help
-Opens the in-game instructions window.
+Opens the in-game instructions dialog.
 .TP
 .B Quit Dueling
 Exits
@@ -187,7 +186,7 @@ the off-board piece tray; moving back to the left collapses it.
 Toggle fullscreen mode.
 .TP
 .B Escape
-Release a currently held piece without moving it.
+Close an open dialog or menu, or release a currently held piece without moving it.
 .SH FILES
 .TP
 .I pinwheel.png
