@@ -108,8 +108,10 @@ struct gui {
 	GtkWidget *new_game_button;
 	GtkWidget *pass_button;
 	GtkWidget *status_label;
+	GtkWidget *collision_label;
 	GtkWidget *log_view;
 	GtkTextBuffer *log_buffer;
+	GtkTextTag *log_collision_tag;
 	int xdim, ydim;
 	double piece_box_open;
 	int inverted;
@@ -132,6 +134,9 @@ struct gui {
 	guint poll_timer_id;
 	uint32_t setup_rng;
 	uint32_t game_counter;
+	struct square recent_collisions[32];
+	int recent_collision_count;
+	char last_collision_text[320];
 };
 
 static GdkColor black;
@@ -156,16 +161,28 @@ static int is_managed_mode(const struct gui *ui)
 	return ui->use_opponent && ui->mode != MODE_FREE;
 }
 
-static void append_log(struct gui *ui, const char *text)
+static void append_log(struct gui *ui, const char *text, int is_collision)
 {
 	GtkTextIter end;
+	gint start_offset;
 
 	if (ui->log_buffer == NULL)
 		return;
 	gtk_text_buffer_get_end_iter(ui->log_buffer, &end);
 	if (gtk_text_buffer_get_char_count(ui->log_buffer) > 0)
 		gtk_text_buffer_insert(ui->log_buffer, &end, "\n", 1);
+	gtk_text_buffer_get_end_iter(ui->log_buffer, &end);
+	start_offset = gtk_text_iter_get_offset(&end);
 	gtk_text_buffer_insert(ui->log_buffer, &end, text, -1);
+	if (is_collision && ui->log_collision_tag != NULL) {
+		GtkTextIter start;
+
+		gtk_text_buffer_get_iter_at_offset(ui->log_buffer, &start,
+						    start_offset);
+		gtk_text_buffer_get_end_iter(ui->log_buffer, &end);
+		gtk_text_buffer_apply_tag(ui->log_buffer, ui->log_collision_tag,
+					  &start, &end);
+	}
 	if (ui->log_view != NULL) {
 		gtk_text_buffer_get_end_iter(ui->log_buffer, &end);
 		gtk_text_view_scroll_to_iter(GTK_TEXT_VIEW(ui->log_view),
@@ -179,13 +196,58 @@ static void clear_log(struct gui *ui)
 		gtk_text_buffer_set_text(ui->log_buffer, "", 0);
 }
 
+static void clear_recent_collisions(struct gui *ui)
+{
+	ui->recent_collision_count = 0;
+	ui->last_collision_text[0] = '\0';
+	if (ui->collision_label != NULL)
+		gtk_label_set_text(GTK_LABEL(ui->collision_label), "");
+}
+
+static void record_recent_collision(struct gui *ui, int x, int y,
+				    const char *text)
+{
+	int i, dup = 0;
+
+	for (i = 0; i < ui->recent_collision_count; i++) {
+		if (ui->recent_collisions[i].x == x &&
+		    ui->recent_collisions[i].y == y) {
+			dup = 1;
+			break;
+		}
+	}
+	if (!dup && ui->recent_collision_count <
+	    (int)ARRAYSIZE(ui->recent_collisions)) {
+		ui->recent_collisions[ui->recent_collision_count].x = x;
+		ui->recent_collisions[ui->recent_collision_count].y = y;
+		ui->recent_collision_count++;
+	}
+
+	if (ui->last_collision_text[0] == '\0') {
+		snprintf(ui->last_collision_text,
+			 sizeof(ui->last_collision_text), "%s", text);
+	} else {
+		size_t cur = strlen(ui->last_collision_text);
+
+		if (cur + 6 < sizeof(ui->last_collision_text))
+			snprintf(ui->last_collision_text + cur,
+				 sizeof(ui->last_collision_text) - cur,
+				 "  |  %s", text);
+	}
+}
+
 static void on_board_event(void *ctx, const struct dmost_event *ev)
 {
 	struct gui *ui = ctx;
 	char buf[160];
 
 	dmost_format_event(ev, ui->board.side, buf, sizeof(buf));
-	append_log(ui, buf);
+	if (ev->type == EVENT_COLLISION) {
+		record_recent_collision(ui, ev->x, ev->y, buf);
+		append_log(ui, buf, 1);
+	} else {
+		append_log(ui, buf, 0);
+	}
 }
 
 static void sync_ui_from_board(struct gui *ui)
@@ -318,6 +380,18 @@ static void update_status(struct gui *ui)
 	}
 
 	gtk_label_set_text(GTK_LABEL(ui->status_label), msg);
+	if (ui->collision_label != NULL) {
+		if (ui->last_collision_text[0] != '\0') {
+			gchar *markup = g_markup_printf_escaped(
+				"<span foreground=\"#d94e1f\" weight=\"bold\">%s</span>",
+				ui->last_collision_text);
+			gtk_label_set_markup(GTK_LABEL(ui->collision_label),
+					     markup);
+			g_free(markup);
+		} else {
+			gtk_label_set_text(GTK_LABEL(ui->collision_label), "");
+		}
+	}
 }
 
 static void cancel_poll_timer(struct gui *ui)
@@ -328,12 +402,12 @@ static void cancel_poll_timer(struct gui *ui)
 	}
 }
 
-static void schedule_opponent_poll(struct gui *ui)
+static void schedule_opponent_poll(struct gui *ui, guint delay_ms)
 {
 	if (ui->poll_timer_id == 0 && ui->opponent != NULL &&
 	    ui->board.phase != PHASE_GAME_OVER)
 		ui->poll_timer_id = gdk_threads_add_timeout(
-			300, opponent_turn_timer_cb, ui);
+			delay_ms, opponent_turn_timer_cb, ui);
 }
 
 static void set_mode_combo_silent(struct gui *ui, int active_idx)
@@ -390,10 +464,11 @@ static void reset_managed_game(struct gui *ui)
 	ui->piece_box_open = 2.0;
 	set_mode_combo_silent(ui, 0);
 	clear_log(ui);
+	clear_recent_collisions(ui);
 	if (ui->use_opponent)
-		append_log(ui, "New game vs Computer. Place your pieces or click Auto Setup.");
+		append_log(ui, "New game vs Computer. Place your pieces or click Auto Setup.", 0);
 	else
-		append_log(ui, "Manual offline mode.");
+		append_log(ui, "Manual offline mode.", 0);
 	sync_ui_from_board(ui);
 	update_status(ui);
 	if (ui->drawing_area != NULL)
@@ -470,7 +545,7 @@ static void start_managed_game(struct gui *ui)
 	uint32_t seed;
 
 	if (!dmost_setup_is_complete(&ui->board)) {
-		append_log(ui, "Place all 18 pieces before starting (or click Auto Setup).");
+		append_log(ui, "Place all 18 pieces before starting (or click Auto Setup).", 0);
 		ui->mode = MODE_BOARD_SETUP;
 		ui->piece_box_open = 2.0;
 		set_mode_combo_silent(ui, 0);
@@ -491,7 +566,7 @@ static void start_managed_game(struct gui *ui)
 	seed = (uint32_t)time(NULL) ^ (++ui->game_counter * 2654435761u);
 	ui->opponent = dmost_ai_opponent_create(opp_side, SIDE_RED, seed);
 	if (ui->opponent == NULL) {
-		append_log(ui, "Failed to initialize computer opponent.");
+		append_log(ui, "Failed to initialize computer opponent.", 0);
 		ui->mode = MODE_BOARD_SETUP;
 		set_mode_combo_silent(ui, 0);
 		update_status(ui);
@@ -510,14 +585,14 @@ static void start_managed_game(struct gui *ui)
 
 	ui->mode = MODE_PLAYING;
 	ui->piece_box_open = 1.0;
-	append_log(ui, "Game started! Red moves first.");
+	append_log(ui, "Game started! Red moves first.", 0);
 	sync_ui_from_board(ui);
 	update_status(ui);
 	gtk_widget_queue_draw(ui->drawing_area);
 
 	if (ui->board.phase == PHASE_PLAYING &&
 	    ui->board.current_turn != ui->board.side)
-		schedule_opponent_poll(ui);
+		schedule_opponent_poll(ui, 300);
 }
 
 static void invert_clicked(__attribute__((unused)) GtkWidget *widget,
@@ -577,7 +652,7 @@ static void auto_setup_clicked(__attribute__((unused)) GtkWidget *widget,
 	dmost_ai_setup_board(&ui->board, &ui->setup_rng);
 	sync_ui_from_board(ui);
 	update_status(ui);
-	append_log(ui, "Board automatically arranged. Click Play Game when ready.");
+	append_log(ui, "Board automatically arranged. Click Play Game when ready.", 0);
 	gtk_widget_queue_draw(ui->drawing_area);
 }
 
@@ -597,6 +672,8 @@ static void pass_clicked(__attribute__((unused)) GtkWidget *widget,
 
 	if (!is_managed_mode(ui) || ui->opponent == NULL)
 		return;
+	if (!dmost_has_any_legal_move(&ui->board))
+		clear_recent_collisions(ui);
 	if (!dmost_initiate_pass(&ui->board, &msg))
 		return;
 
@@ -608,7 +685,7 @@ static void pass_clicked(__attribute__((unused)) GtkWidget *widget,
 
 	if (ui->board.phase == PHASE_PLAYING &&
 	    ui->board.current_turn != ui->board.side)
-		schedule_opponent_poll(ui);
+		schedule_opponent_poll(ui, ui->recent_collision_count > 0 ? 900 : 300);
 }
 
 static gint key_press_cb(__attribute__((unused)) GtkWidget *widget,
@@ -784,6 +861,138 @@ void generic_draw_piece_off_board(struct piece *p, cairo_t *cr, double radius)
 	cairo_restore(cr);
 }
 
+static void draw_dead_piece_on_board(const struct piece *p, cairo_t *cr,
+				     double cx, double cy, double radius_scale)
+{
+	double radius;
+	double d;
+
+	if (ui.xdim / ui.piece_box_open < ui.ydim)
+		radius = (0.75 * ui.xdim / (12.0 * ui.piece_box_open)) / 2.0;
+	else
+		radius = (0.75 * ui.ydim / 12.0) / 2.0;
+	radius *= radius_scale;
+	d = radius * 0.72;
+
+	cairo_save(cr);
+	cairo_arc(cr, cx, cy, radius, 0.0, 2.0 * M_PI);
+	cairo_set_source_rgba(cr, p->r, p->g, p->b, 0.14);
+	cairo_fill_preserve(cr);
+	cairo_stroke(cr);
+	cairo_restore(cr);
+
+	cairo_save(cr);
+	cairo_set_line_width(cr, MIN(ui.xdim, ui.ydim) / 220.0);
+	cairo_set_source_rgba(cr, p->r, p->g, p->b, 0.55);
+	cairo_arc(cr, cx, cy, radius * 1.05, 0.0, 2.0 * M_PI);
+	cairo_stroke(cr);
+	cairo_restore(cr);
+
+	cairo_save(cr);
+	cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.80);
+	if (radius > 8.0)
+		draw_centered_text(cr, cx, cy,
+				   MIN(ui.xdim, ui.ydim) / 32.0 * radius_scale,
+				   p->name);
+	cairo_set_source_rgba(cr, 1.0, 0.35, 0.2, 0.85);
+	cairo_set_line_width(cr, 2.0);
+	cairo_move_to(cr, cx - d, cy - d);
+	cairo_line_to(cr, cx + d, cy + d);
+	cairo_move_to(cr, cx + d, cy - d);
+	cairo_line_to(cr, cx - d, cy + d);
+	cairo_stroke(cr);
+	cairo_restore(cr);
+}
+
+static int has_live_piece_at(int x, int y)
+{
+	int j;
+
+	for (j = 0; p1[j].name != NULL; j++) {
+		if (p1[j].alive && p1[j].x == x && p1[j].y == y &&
+		    &p1[j] != ui.holding)
+			return 1;
+	}
+	for (j = 0; p2[j].name != NULL; j++) {
+		if (p2[j].alive && p2[j].x == x && p2[j].y == y &&
+		    &p2[j] != ui.holding)
+			return 1;
+	}
+	return 0;
+}
+
+static void count_dead_square_stack(const struct piece *target,
+				    struct piece *list, int *total, int *idx,
+				    int before)
+{
+	int j;
+
+	for (j = 0; list[j].name != NULL; j++) {
+		if (list[j].alive || list[j].x == UNKNOWN)
+			continue;
+		if (list[j].x == target->x && list[j].y == target->y) {
+			if (before || &list[j] < target)
+				(*idx)++;
+			(*total)++;
+		}
+	}
+}
+
+static void draw_dead_pieces_on_board_list(cairo_t *cr, struct piece *p)
+{
+	int i;
+	double cell_w = ui.xdim / (12.0 * ui.piece_box_open);
+	double cell_h = ui.ydim / 12.0;
+
+	for (i = 0; p[i].name != NULL; i++) {
+		int dead_total = 0, dead_idx = 0, live_here;
+		double cx, cy, scale;
+
+		if (p[i].alive || p[i].x == UNKNOWN)
+			continue;
+
+		if (p == p1) {
+			count_dead_square_stack(&p[i], p1, &dead_total,
+						&dead_idx, 0);
+			count_dead_square_stack(&p[i], p2, &dead_total,
+						&dead_idx, 0);
+		} else {
+			count_dead_square_stack(&p[i], p1, &dead_total,
+						&dead_idx, 1);
+			count_dead_square_stack(&p[i], p2, &dead_total,
+						&dead_idx, 0);
+		}
+
+		live_here = has_live_piece_at(p[i].x, p[i].y);
+		cx = p[i].x * cell_w + 1.5 * cell_w;
+		cy = invert(p[i].y) * cell_h + 1.5 * cell_h;
+
+		if (live_here) {
+			cx += cell_w * 0.26 - dead_idx * cell_w * 0.22;
+			cy += cell_h * 0.26;
+			scale = 0.48;
+		} else if (dead_total > 1) {
+			double angle = 2.0 * M_PI * (double)dead_idx /
+				       (double)dead_total;
+			cx += cos(angle) * cell_w * 0.20;
+			cy += sin(angle) * cell_h * 0.16;
+			scale = 0.68;
+		} else {
+			scale = 0.80;
+		}
+
+		draw_dead_piece_on_board(&p[i], cr, cx, cy, scale);
+	}
+}
+
+static void draw_dead_pieces_on_board(cairo_t *cr)
+{
+	if (!is_managed_mode(&ui))
+		return;
+	draw_dead_pieces_on_board_list(cr, p1);
+	draw_dead_pieces_on_board_list(cr, p2);
+}
+
 static int should_show_in_tray(const struct gui *ui, const struct piece *p)
 {
 	int is_own;
@@ -796,12 +1005,13 @@ static int should_show_in_tray(const struct gui *ui, const struct piece *p)
 	if (!is_managed_mode(ui))
 		return 1;
 
+	/* Destroyed pieces with known squares stay rendered on the board */
+	if (!p->alive && p->x != UNKNOWN)
+		return 0;
+
 	is_own = ((ui->playing_as == PLAYING_AS_RED && p->r > 0.9) ||
 		  (ui->playing_as == PLAYING_AS_BLUE && p->b > 0.9));
-	if (is_own)
-		return 1;
-	/* In managed mode, only show enemy pieces in the tray once destroyed */
-	return !p->alive;
+	return is_own;
 }
 
 static void draw_pieces_off_board(cairo_t *cr, struct piece *p,
@@ -976,6 +1186,32 @@ static void highlight_visited_squares(cairo_t *cr, struct gui *ui)
 	cairo_restore(cr);
 }
 
+static void highlight_recent_collisions(cairo_t *cr, struct gui *ui)
+{
+	int i;
+	double cell_w = ui->xdim / (12.0 * ui->piece_box_open);
+	double cell_h = ui->ydim / 12.0;
+
+	if (!is_managed_mode(ui) || ui->recent_collision_count <= 0)
+		return;
+
+	for (i = 0; i < ui->recent_collision_count; i++) {
+		int x = ui->recent_collisions[i].x;
+		int y = ui->recent_collisions[i].y;
+		double x1 = (x + 1) * cell_w;
+		double y1 = (invert(y) + 1) * cell_h;
+
+		highlight_square(cr, ui, x, y, 1.0, 0.55, 0.0, 0.26);
+		cairo_save(cr);
+		cairo_set_source_rgba(cr, 1.0, 0.72, 0.15, 0.92);
+		cairo_set_line_width(cr, 2.5);
+		cairo_rectangle(cr, x1 + 1.5, y1 + 1.5,
+				cell_w - 3.0, cell_h - 3.0);
+		cairo_stroke(cr);
+		cairo_restore(cr);
+	}
+}
+
 static gboolean on_expose_drawing_area(GtkWidget *w,
 				       __attribute__((unused)) GdkEventExpose *event,
 				       gpointer p)
@@ -1070,8 +1306,10 @@ static gboolean on_expose_drawing_area(GtkWidget *w,
 	cairo_restore(cr);
 
 	highlight_visited_squares(cr, ui);
+	highlight_recent_collisions(cr, ui);
 	highlight_legal_moves(cr, ui);
 
+	draw_dead_pieces_on_board(cr);
 	draw_pieces_on_board(cr, p1);
 	draw_pieces_on_board(cr, p2);
 	draw_pieces_off_board(cr, p1, &off_board_piece_count);
@@ -1147,6 +1385,8 @@ static struct piece *find_closest_piece(const struct gui *ui, struct piece *p,
 		double dx, dy, dist_sq;
 
 		if (own_only && !is_own_piece(ui, &p[i]))
+			continue;
+		if (is_managed_mode(ui) && !p[i].alive)
 			continue;
 		if (board_only && (p[i].x == UNKNOWN || !p[i].alive))
 			continue;
@@ -1239,6 +1479,7 @@ static gboolean on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 						    tmpy != ui->holding->pickedy) {
 							struct dmost_msg msg;
 
+							clear_recent_collisions(ui);
 							if (dmost_initiate_move(&ui->board,
 										ui->holding->id,
 										tmpx, tmpy,
@@ -1253,7 +1494,7 @@ static gboolean on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 								if (ui->board.phase == PHASE_RESOLVING ||
 								    (ui->board.phase == PHASE_PLAYING &&
 								     ui->board.current_turn != ui->board.side))
-									schedule_opponent_poll(ui);
+									schedule_opponent_poll(ui, ui->recent_collision_count > 0 ? 900 : 300);
 								return TRUE;
 							}
 						}
@@ -1627,6 +1868,12 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 	gtk_box_pack_end(GTK_BOX(bottom_hbox), ui->pass_button, FALSE, FALSE, 6);
 	gtk_box_pack_start(GTK_BOX(vbox), bottom_hbox, FALSE, FALSE, 2);
 
+	/* Collision banner above combat log */
+	ui->collision_label = gtk_label_new("");
+	gtk_misc_set_alignment(GTK_MISC(ui->collision_label), 0.0, 0.5);
+	gtk_label_set_line_wrap(GTK_LABEL(ui->collision_label), TRUE);
+	gtk_box_pack_start(GTK_BOX(vbox), ui->collision_label, FALSE, FALSE, 2);
+
 	/* Compact scrollable combat/event log */
 	log_scroll = gtk_scrolled_window_new(NULL, NULL);
 	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(log_scroll),
@@ -1638,6 +1885,11 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 	gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(ui->log_view), FALSE);
 	gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(ui->log_view), GTK_WRAP_WORD);
 	ui->log_buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(ui->log_view));
+	ui->log_collision_tag = gtk_text_buffer_create_tag(
+		ui->log_buffer, "collision",
+		"foreground", "#d94e1f",
+		"weight", PANGO_WEIGHT_BOLD,
+		NULL);
 	gtk_container_add(GTK_CONTAINER(log_scroll), ui->log_view);
 	gtk_box_pack_start(GTK_BOX(vbox), log_scroll, FALSE, FALSE, 2);
 
