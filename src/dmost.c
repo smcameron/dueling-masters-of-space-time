@@ -173,6 +173,11 @@ struct gui {
 	int active_enemy_target_x[NUM_PIECES];
 	int active_enemy_target_y[NUM_PIECES];
 	uint8_t enemy_animated_this_step[NUM_PIECES];
+
+	GtkWidget *game_over_dialog;
+	guint game_over_timer_id;
+	int game_over_pending;
+	int game_over_shown;
 };
 
 static GdkColor black;
@@ -182,6 +187,7 @@ static void generic_draw_piece_on_board(struct piece *p, cairo_t *cr,
 					double radius_scale);
 static gboolean opponent_turn_timer_cb(gpointer data);
 static gboolean anim_timer_cb(gpointer data);
+static void reset_managed_game(struct gui *ui);
 
 static struct piece *own_pieces(const struct gui *ui)
 {
@@ -273,6 +279,110 @@ static void record_recent_collision(struct gui *ui, int x, int y,
 	}
 }
 
+static void dismiss_game_over_dialog(struct gui *ui)
+{
+	if (ui->game_over_timer_id != 0) {
+		g_source_remove(ui->game_over_timer_id);
+		ui->game_over_timer_id = 0;
+	}
+	if (ui->game_over_dialog != NULL) {
+		GtkWidget *dlg = ui->game_over_dialog;
+		ui->game_over_dialog = NULL;
+		gtk_widget_destroy(dlg);
+	}
+	ui->game_over_pending = 0;
+	ui->game_over_shown = 0;
+}
+
+static void on_game_over_dialog_response(GtkDialog *dialog, gint response_id,
+					 gpointer data)
+{
+	struct gui *ui = data;
+
+	ui->game_over_dialog = NULL;
+	gtk_widget_destroy(GTK_WIDGET(dialog));
+	if (response_id == GTK_RESPONSE_ACCEPT)
+		reset_managed_game(ui);
+}
+
+static gboolean show_game_over_dialog_cb(gpointer data)
+{
+	struct gui *ui = data;
+	const char *title;
+	const char *primary;
+	char secondary[160];
+	GtkWidget *dlg;
+	int human_won;
+
+	if (!is_managed_mode(ui) || ui->board.phase != PHASE_GAME_OVER ||
+	    ui->game_over_shown) {
+		ui->game_over_timer_id = 0;
+		return FALSE;
+	}
+
+	if (ui->anim_count > 0)
+		return TRUE;
+
+	ui->game_over_timer_id = 0;
+	ui->game_over_pending = 0;
+	ui->game_over_shown = 1;
+
+	human_won = ((ui->board.side == SIDE_RED &&
+		      ui->board.result == RESULT_RED_WINS) ||
+		     (ui->board.side == SIDE_BLUE &&
+		      ui->board.result == RESULT_BLUE_WINS));
+
+	if (ui->board.result == RESULT_DRAW) {
+		title = "Game Over — Draw";
+		primary = "Game Over: Draw!";
+		snprintf(secondary, sizeof(secondary),
+			 "Neither player can destroy the other's Home Planet (turn %d).",
+			 ui->board.turn_number);
+	} else if (human_won) {
+		title = "Game Over — Victory!";
+		primary = (ui->board.result == RESULT_RED_WINS) ?
+			  "You Win! (Red Wins)" : "You Win! (Blue Wins)";
+		snprintf(secondary, sizeof(secondary),
+			 "You destroyed the opponent's Home Planet on turn %d!",
+			 ui->board.turn_number);
+	} else {
+		title = "Game Over — Defeat";
+		primary = (ui->board.result == RESULT_RED_WINS) ?
+			  "You Lose! (Red Wins)" : "You Lose! (Blue Wins)";
+		snprintf(secondary, sizeof(secondary),
+			 "Your Home Planet was destroyed on turn %d.",
+			 ui->board.turn_number);
+	}
+
+	dlg = gtk_message_dialog_new(GTK_WINDOW(ui->window),
+				     GTK_DIALOG_DESTROY_WITH_PARENT,
+				     GTK_MESSAGE_INFO,
+				     GTK_BUTTONS_NONE,
+				     "%s", primary);
+	gtk_window_set_title(GTK_WINDOW(dlg), title);
+	gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dlg),
+						 "%s", secondary);
+	gtk_dialog_add_button(GTK_DIALOG(dlg), "View Board",
+			      GTK_RESPONSE_CLOSE);
+	gtk_dialog_add_button(GTK_DIALOG(dlg), "Play Again",
+			      GTK_RESPONSE_ACCEPT);
+	gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_ACCEPT);
+	g_signal_connect(dlg, "response",
+			 G_CALLBACK(on_game_over_dialog_response), ui);
+	ui->game_over_dialog = dlg;
+	gtk_widget_show_all(dlg);
+	return FALSE;
+}
+
+static void schedule_game_over_dialog(struct gui *ui)
+{
+	if (ui->game_over_shown || ui->game_over_timer_id != 0)
+		return;
+	ui->game_over_pending = 1;
+	ui->game_over_timer_id = gdk_threads_add_timeout(
+		300, show_game_over_dialog_cb, ui);
+}
+
 static void clear_animations(struct gui *ui)
 {
 	if (ui->anim_timer_id != 0) {
@@ -290,6 +400,9 @@ static gboolean anim_timer_cb(gpointer data)
 
 	if (ui->anim_count <= 0) {
 		ui->anim_timer_id = 0;
+		if (ui->game_over_pending && !ui->game_over_shown &&
+		    ui->game_over_timer_id == 0)
+			schedule_game_over_dialog(ui);
 		return FALSE;
 	}
 
@@ -305,6 +418,9 @@ static gboolean anim_timer_cb(gpointer data)
 
 	if (ui->anim_count <= 0) {
 		ui->anim_timer_id = 0;
+		if (ui->game_over_pending && !ui->game_over_shown &&
+		    ui->game_over_timer_id == 0)
+			schedule_game_over_dialog(ui);
 		return FALSE;
 	}
 	return TRUE;
@@ -523,6 +639,9 @@ static void on_board_event(void *ctx, const struct dmost_event *ev)
 
 		record_recent_collision(ui, ev->x, ev->y, buf);
 		append_log(ui, buf, 1);
+	} else if (ev->type == EVENT_GAME_OVER) {
+		append_log(ui, buf, 1);
+		schedule_game_over_dialog(ui);
 	} else {
 		append_log(ui, buf, 0);
 	}
@@ -731,6 +850,7 @@ static void reset_managed_game(struct gui *ui)
 
 	cancel_poll_timer(ui);
 	clear_animations(ui);
+	dismiss_game_over_dialog(ui);
 	if (ui->opponent != NULL) {
 		dmost_opponent_destroy(ui->opponent);
 		ui->opponent = NULL;
@@ -913,6 +1033,7 @@ static void quit_clicked(__attribute__((unused)) GtkWidget *widget,
 	if (ui != NULL) {
 		cancel_poll_timer(ui);
 		clear_animations(ui);
+		dismiss_game_over_dialog(ui);
 		if (ui->opponent != NULL) {
 			dmost_opponent_destroy(ui->opponent);
 			ui->opponent = NULL;
@@ -1650,6 +1771,67 @@ static void draw_active_animation(cairo_t *cr, struct gui *ui)
 	}
 }
 
+static void draw_game_over_banner(cairo_t *cr, struct gui *ui)
+{
+	double board_w = 10.0 * ui->xdim / (12.0 * ui->piece_box_open);
+	double left_x = ui->xdim / (12.0 * ui->piece_box_open);
+	double cx = left_x + board_w * 0.5;
+	double cy = ui->ydim * 0.5;
+	double bw = board_w * 0.84;
+	double bh = ui->ydim * 0.16;
+	double br = 0.7, bg = 0.7, bb = 0.8;
+	const char *headline = "GAME OVER";
+	const char *subline = "";
+	int human_won;
+
+	if (!is_managed_mode(ui) || ui->board.phase != PHASE_GAME_OVER ||
+	    ui->anim_count > 0)
+		return;
+
+	human_won = ((ui->board.side == SIDE_RED &&
+		      ui->board.result == RESULT_RED_WINS) ||
+		     (ui->board.side == SIDE_BLUE &&
+		      ui->board.result == RESULT_BLUE_WINS));
+
+	if (ui->board.result == RESULT_DRAW) {
+		br = 0.55;
+		bg = 0.75;
+		bb = 0.95;
+		headline = "GAME OVER — DRAW";
+		subline = "Neither player can reach the other's Home Planet";
+	} else if (human_won) {
+		br = 0.25;
+		bg = 0.95;
+		bb = 0.45;
+		headline = (ui->board.result == RESULT_RED_WINS) ?
+			   "VICTORY! RED WINS!" : "VICTORY! BLUE WINS!";
+		subline = "Opponent's Home Planet destroyed!";
+	} else {
+		br = 1.0;
+		bg = 0.30;
+		bb = 0.25;
+		headline = (ui->board.result == RESULT_RED_WINS) ?
+			   "DEFEAT — RED WINS" : "DEFEAT — BLUE WINS";
+		subline = "Your Home Planet was destroyed!";
+	}
+
+	cairo_save(cr);
+	cairo_set_source_rgba(cr, 0.05, 0.05, 0.10, 0.82);
+	cairo_rectangle(cr, cx - bw * 0.5, cy - bh * 0.5, bw, bh);
+	cairo_fill_preserve(cr);
+	cairo_set_line_width(cr, 3.0);
+	cairo_set_source_rgba(cr, br, bg, bb, 0.95);
+	cairo_stroke(cr);
+
+	cairo_set_source_rgba(cr, br, bg, bb, 1.0);
+	draw_centered_text(cr, cx, cy - bh * 0.16,
+			   MIN(board_w, ui->ydim) / 17.0, headline);
+	cairo_set_source_rgba(cr, 0.95, 0.95, 0.98, 0.95);
+	draw_centered_text(cr, cx, cy + bh * 0.20,
+			   MIN(board_w, ui->ydim) / 30.0, subline);
+	cairo_restore(cr);
+}
+
 static gboolean on_expose_drawing_area(GtkWidget *w,
 				       __attribute__((unused)) GdkEventExpose *event,
 				       gpointer p)
@@ -1751,6 +1933,7 @@ static gboolean on_expose_drawing_area(GtkWidget *w,
 	draw_pieces_on_board(cr, p1);
 	draw_pieces_on_board(cr, p2);
 	draw_active_animation(cr, ui);
+	draw_game_over_banner(cr, ui);
 	draw_pieces_off_board(cr, p1, &off_board_piece_count);
 	draw_pieces_off_board(cr, p2, &off_board_piece_count);
 	if (ui->holding != NULL)
