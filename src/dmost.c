@@ -819,7 +819,7 @@ static void draw_pieces_off_board(cairo_t *cr, struct piece *p,
 	count = *initial_count;
 	for (i = 0; p[i].name != NULL; i++) {
 		if (!should_show_in_tray(&ui, &p[i])) {
-			if (p[i].x == UNKNOWN) {
+			if (p[i].x == UNKNOWN && &p[i] != ui.holding) {
 				p[i].sx = -1000;
 				p[i].sy = -1000;
 			}
