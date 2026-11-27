@@ -26,6 +26,10 @@
 #include <time.h>
 
 #include <SDL.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#include <emscripten/html5.h>
+#endif
 
 #include "game.h"
 #include "opponent.h"
@@ -2200,9 +2204,13 @@ static void layout_ui(struct gui *ui)
 	place_toolbar_item(&ui->help_btn.rect,
 			   sdl_button_preferred_width(ui->help_btn.label),
 			   &cx, &cy, ui->win_w);
-	place_toolbar_item(&ui->quit_btn.rect,
-			   sdl_button_preferred_width(ui->quit_btn.label),
-			   &cx, &cy, ui->win_w);
+	if (ui->quit_btn.visible) {
+		place_toolbar_item(&ui->quit_btn.rect,
+				   sdl_button_preferred_width(ui->quit_btn.label),
+				   &cx, &cy, ui->win_w);
+	} else {
+		ui->quit_btn.rect = (SDL_FRect){ 0.0f, 0.0f, 0.0f, 0.0f };
+	}
 
 	toolbar_h = cy + TOOLBAR_BTN_H + TOOLBAR_PAD;
 	ui->toolbar_rect = (SDL_FRect){ 0.0f, 0.0f, (float)ui->win_w, toolbar_h };
@@ -2315,7 +2323,8 @@ static void update_hover_tooltip(struct gui *ui, float mx, float my)
 		tip = ui->new_game_btn.tooltip;
 	else if (sdl_point_in_rect(mx, my, ui->invert_btn.rect))
 		tip = ui->invert_btn.tooltip;
-	else if (sdl_point_in_rect(mx, my, ui->quit_btn.rect))
+	else if (ui->quit_btn.visible &&
+		 sdl_point_in_rect(mx, my, ui->quit_btn.rect))
 		tip = ui->quit_btn.tooltip;
 
 	if (tip != ui->hover_tooltip) {
@@ -2692,15 +2701,60 @@ static void handle_event(struct gui *ui, const SDL_Event *ev)
 	}
 }
 
+#ifdef __EMSCRIPTEN__
+static void get_browser_canvas_size(int *out_w, int *out_h)
+{
+	double cw = 0.0, ch = 0.0;
+
+	if (emscripten_get_element_css_size("#canvas", &cw, &ch) ==
+	    EMSCRIPTEN_RESULT_SUCCESS &&
+	    cw >= 320.0 && ch >= 320.0) {
+		*out_w = (int)cw;
+		*out_h = (int)ch;
+	} else {
+		*out_w = 1024;
+		*out_h = 820;
+	}
+}
+
+static EM_BOOL on_emscripten_resize(int event_type,
+				    const EmscriptenUiEvent *ev,
+				    void *user_data)
+{
+	struct gui *u = user_data;
+	int w = 1024, h = 820;
+
+	(void)event_type;
+	(void)ev;
+	get_browser_canvas_size(&w, &h);
+	if (w != u->win_w || h != u->win_h) {
+		u->win_w = w;
+		u->win_h = h;
+		SDL_SetWindowSize(u->window, w, h);
+		layout_ui(u);
+		u->dirty = 1;
+	}
+	return EM_FALSE;
+}
+#endif
+
 static int init_ui(struct gui *ui)
 {
+	Uint32 renderer_flags;
+
 	if (SDL_Init(SDL_INIT_VIDEO) != 0) {
 		fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
 		return -1;
 	}
 
+#ifdef __EMSCRIPTEN__
+	get_browser_canvas_size(&ui->win_w, &ui->win_h);
+	renderer_flags = SDL_RENDERER_ACCELERATED;
+#else
 	ui->win_w = 1024;
 	ui->win_h = 820;
+	renderer_flags = SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC;
+#endif
 	ui->window = SDL_CreateWindow("Dueling Masters of Space Time",
 				      SDL_WINDOWPOS_CENTERED,
 				      SDL_WINDOWPOS_CENTERED,
@@ -2714,9 +2768,7 @@ static int init_ui(struct gui *ui)
 	}
 	SDL_SetWindowMinimumSize(ui->window, 640, 520);
 
-	ui->renderer = SDL_CreateRenderer(
-		ui->window, -1,
-		SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+	ui->renderer = SDL_CreateRenderer(ui->window, -1, renderer_flags);
 	if (ui->renderer == NULL) {
 		ui->renderer = SDL_CreateRenderer(ui->window, -1,
 						  SDL_RENDERER_SOFTWARE);
@@ -2763,6 +2815,9 @@ static int init_ui(struct gui *ui)
 			"Invert Board so that your half is on the bottom");
 	sdl_button_init(&ui->help_btn, "Help", NULL);
 	sdl_button_init(&ui->quit_btn, "Quit Dueling", "Quit Dueling");
+#ifdef __EMSCRIPTEN__
+	ui->quit_btn.visible = 0;
+#endif
 	sdl_button_init(&ui->pass_btn, "Pass Turn", NULL);
 	ui->pass_btn.enabled = 0;
 	sdl_button_init(&ui->play_again_btn, "Begin New Game", NULL);
@@ -2789,6 +2844,10 @@ static int init_ui(struct gui *ui)
 	ui->quit = 0;
 
 	layout_ui(ui);
+#ifdef __EMSCRIPTEN__
+	emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, ui, 0,
+				       on_emscripten_resize);
+#endif
 	return 0;
 }
 
@@ -2852,6 +2911,22 @@ static void init_pieces(struct piece **p1_out, struct piece **p2_out)
 	}
 }
 
+#ifdef __EMSCRIPTEN__
+static void emscripten_main_loop(void *arg)
+{
+	struct gui *u = arg;
+
+	if (u->quit) {
+		emscripten_cancel_main_loop();
+		cleanup_ui(u);
+		free(p1);
+		free(p2);
+		return;
+	}
+	dmost_frame_step(u, 0);
+}
+#endif
+
 int main(int argc, char *argv[])
 {
 	(void)argc;
@@ -2866,6 +2941,9 @@ int main(int argc, char *argv[])
 	reset_managed_game(&ui);
 	render_ui(&ui);
 
+#ifdef __EMSCRIPTEN__
+	emscripten_set_main_loop_arg(emscripten_main_loop, &ui, 0, 1);
+#else
 	while (!ui.quit) {
 		int wait_ms = 250;
 
@@ -2879,5 +2957,6 @@ int main(int argc, char *argv[])
 	cleanup_ui(&ui);
 	free(p1);
 	free(p2);
+#endif
 	return 0;
 }

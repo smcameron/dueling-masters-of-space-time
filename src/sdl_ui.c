@@ -897,14 +897,11 @@ void sdl_modal_layout(struct sdl_modal *modal, int win_w, int win_h)
 	}
 
 	{
-		float text_y = modal->body_rect.y;
 		float avail_h = modal->body_rect.h;
 		float text_w = modal->body_rect.w - 14.0f;
 
-		if (!modal->is_help && modal->primary[0] != '\0') {
-			text_y += 30.0f;
+		if (!modal->is_help && modal->primary[0] != '\0')
 			avail_h -= 30.0f;
-		}
 		if (text_w < 32.0f)
 			text_w = 32.0f;
 		modal->visible_body_lines = (avail_h > 0.0f)
