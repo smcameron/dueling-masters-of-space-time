@@ -41,6 +41,26 @@
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #endif
 
+#define ANIM_QUEUE_CAP 32
+#define ANIM_TICK_MS 30
+
+enum anim_kind {
+	ANIM_SLIDE = 1,
+	ANIM_APPEAR = 2,
+	ANIM_IMPACT = 3,
+};
+
+struct anim_step {
+	enum anim_kind kind;
+	struct piece *piece;
+	struct square path[MAX_PATH_LEN];
+	int path_len;
+	int x, y;
+	double r, g, b;
+	int duration_ms;
+	int elapsed_ms;
+};
+
 struct piece {
 	char *name;
 	char *description;
@@ -137,6 +157,22 @@ struct gui {
 	struct square recent_collisions[32];
 	int recent_collision_count;
 	char last_collision_text[320];
+
+	struct anim_step anim_queue[ANIM_QUEUE_CAP];
+	int anim_head;
+	int anim_count;
+	guint anim_timer_id;
+
+	int snap_own_ann_x[NUM_PIECES];
+	int snap_own_ann_y[NUM_PIECES];
+	int snap_own_x[NUM_PIECES];
+	int snap_own_y[NUM_PIECES];
+	int snap_own_transit[NUM_PIECES];
+	int snap_enemy_x[NUM_PIECES];
+	int snap_enemy_y[NUM_PIECES];
+	int active_enemy_target_x[NUM_PIECES];
+	int active_enemy_target_y[NUM_PIECES];
+	uint8_t enemy_animated_this_step[NUM_PIECES];
 };
 
 static GdkColor black;
@@ -145,6 +181,7 @@ static struct gui ui;
 static void generic_draw_piece_on_board(struct piece *p, cairo_t *cr,
 					double radius_scale);
 static gboolean opponent_turn_timer_cb(gpointer data);
+static gboolean anim_timer_cb(gpointer data);
 
 static struct piece *own_pieces(const struct gui *ui)
 {
@@ -236,13 +273,254 @@ static void record_recent_collision(struct gui *ui, int x, int y,
 	}
 }
 
+static void clear_animations(struct gui *ui)
+{
+	if (ui->anim_timer_id != 0) {
+		g_source_remove(ui->anim_timer_id);
+		ui->anim_timer_id = 0;
+	}
+	ui->anim_head = 0;
+	ui->anim_count = 0;
+}
+
+static gboolean anim_timer_cb(gpointer data)
+{
+	struct gui *ui = data;
+	struct anim_step *step;
+
+	if (ui->anim_count <= 0) {
+		ui->anim_timer_id = 0;
+		return FALSE;
+	}
+
+	step = &ui->anim_queue[ui->anim_head];
+	step->elapsed_ms += ANIM_TICK_MS;
+	if (step->elapsed_ms >= step->duration_ms) {
+		ui->anim_head = (ui->anim_head + 1) % ANIM_QUEUE_CAP;
+		ui->anim_count--;
+	}
+
+	if (ui->drawing_area != NULL)
+		gtk_widget_queue_draw(ui->drawing_area);
+
+	if (ui->anim_count <= 0) {
+		ui->anim_timer_id = 0;
+		return FALSE;
+	}
+	return TRUE;
+}
+
+static void enqueue_anim(struct gui *ui, const struct anim_step *step)
+{
+	int tail;
+
+	if (ui->anim_count >= ANIM_QUEUE_CAP)
+		return;
+	tail = (ui->anim_head + ui->anim_count) % ANIM_QUEUE_CAP;
+	ui->anim_queue[tail] = *step;
+	ui->anim_count++;
+
+	if (ui->anim_timer_id == 0)
+		ui->anim_timer_id = gdk_threads_add_timeout(
+			ANIM_TICK_MS, anim_timer_cb, ui);
+}
+
+static int build_partial_path(enum piece_type type, int sx, int sy,
+			      int full_ex, int full_ey,
+			      int stop_x, int stop_y,
+			      struct square *out_path)
+{
+	int len, i;
+
+	if (full_ex != UNKNOWN_POS && full_ey != UNKNOWN_POS &&
+	    (sx != full_ex || sy != full_ey)) {
+		len = dmost_compute_path(type, sx, sy, full_ex, full_ey,
+					 out_path, MAX_PATH_LEN);
+		if (len >= 2) {
+			for (i = 0; i < len; i++) {
+				if (out_path[i].x == stop_x &&
+				    out_path[i].y == stop_y)
+					return (i >= 1) ? (i + 1) : 2;
+			}
+		}
+	}
+
+	if (sx != stop_x || sy != stop_y) {
+		len = dmost_compute_path(type, sx, sy, stop_x, stop_y,
+					 out_path, MAX_PATH_LEN);
+		if (len >= 2)
+			return len;
+		out_path[0].x = sx;
+		out_path[0].y = sy;
+		out_path[1].x = stop_x;
+		out_path[1].y = stop_y;
+		return 2;
+	}
+	return 0;
+}
+
+static void enqueue_slide_anim(struct gui *ui, struct piece *piece,
+			       enum piece_type type, int sx, int sy,
+			       int full_ex, int full_ey,
+			       int stop_x, int stop_y)
+{
+	struct anim_step step;
+	int dur;
+
+	memset(&step, 0, sizeof(step));
+	step.path_len = build_partial_path(type, sx, sy, full_ex, full_ey,
+					   stop_x, stop_y, step.path);
+	if (step.path_len < 2)
+		return;
+
+	dur = 450 + 50 * (step.path_len - 1);
+	if (dur > 750)
+		dur = 750;
+
+	step.kind = ANIM_SLIDE;
+	step.piece = piece;
+	step.x = stop_x;
+	step.y = stop_y;
+	step.r = piece->r;
+	step.g = piece->g;
+	step.b = piece->b;
+	step.duration_ms = dur;
+	enqueue_anim(ui, &step);
+}
+
+static void enqueue_appear_anim(struct gui *ui, struct piece *piece,
+				int x, int y)
+{
+	struct anim_step step;
+
+	memset(&step, 0, sizeof(step));
+	step.kind = ANIM_APPEAR;
+	step.piece = piece;
+	step.x = x;
+	step.y = y;
+	step.r = piece->r;
+	step.g = piece->g;
+	step.b = piece->b;
+	step.duration_ms = 500;
+	enqueue_anim(ui, &step);
+}
+
+static void enqueue_impact_anim(struct gui *ui, int x, int y)
+{
+	struct anim_step step;
+
+	memset(&step, 0, sizeof(step));
+	step.kind = ANIM_IMPACT;
+	step.x = x;
+	step.y = y;
+	step.r = 1.0;
+	step.g = 0.65;
+	step.b = 0.15;
+	step.duration_ms = 450;
+	enqueue_anim(ui, &step);
+}
+
+static void snapshot_board_for_anim(struct gui *ui)
+{
+	int i;
+
+	for (i = 0; i < NUM_PIECES; i++) {
+		ui->snap_own_ann_x[i] = ui->board.own[i].announced_x;
+		ui->snap_own_ann_y[i] = ui->board.own[i].announced_y;
+		ui->snap_own_x[i] = ui->board.own[i].x;
+		ui->snap_own_y[i] = ui->board.own[i].y;
+		ui->snap_own_transit[i] = ui->board.own[i].in_transit;
+		ui->snap_enemy_x[i] = ui->board.enemy[i].known_x;
+		ui->snap_enemy_y[i] = ui->board.enemy[i].known_y;
+		ui->active_enemy_target_x[i] = UNKNOWN_POS;
+		ui->active_enemy_target_y[i] = UNKNOWN_POS;
+		ui->enemy_animated_this_step[i] = 0;
+	}
+}
+
+static void finalize_enemy_move_anims(struct gui *ui)
+{
+	struct piece *enemy = enemy_pieces(ui);
+	int i;
+
+	for (i = 0; i < NUM_PIECES; i++) {
+		int kx = ui->board.enemy[i].known_x;
+		int ky = ui->board.enemy[i].known_y;
+		int sx = ui->snap_enemy_x[i];
+		int sy = ui->snap_enemy_y[i];
+
+		if (ui->enemy_animated_this_step[i] || kx == UNKNOWN_POS)
+			continue;
+		if (kx == sx && ky == sy)
+			continue;
+
+		if (sx == UNKNOWN_POS)
+			enqueue_appear_anim(ui, &enemy[i], kx, ky);
+		else
+			enqueue_slide_anim(ui, &enemy[i],
+					   ui->board.enemy[i].type,
+					   sx, sy, kx, ky, kx, ky);
+	}
+}
+
 static void on_board_event(void *ctx, const struct dmost_event *ev)
 {
 	struct gui *ui = ctx;
 	char buf[160];
 
 	dmost_format_event(ev, ui->board.side, buf, sizeof(buf));
+	if (ev->type == EVENT_DEPART && ev->actor != ui->board.side &&
+	    ev->piece_id >= 0 && ev->piece_id < NUM_PIECES) {
+		ui->active_enemy_target_x[ev->piece_id] = ev->x;
+		ui->active_enemy_target_y[ev->piece_id] = ev->y;
+	}
 	if (ev->type == EVENT_COLLISION) {
+		int id = ev->piece_id;
+
+		if (ev->actor == ui->board.side &&
+		    id >= 0 && id < NUM_PIECES) {
+			if (ui->snap_own_transit[id] &&
+			    ui->snap_own_ann_x[id] != UNKNOWN_POS &&
+			    (ui->snap_own_ann_x[id] != ev->x ||
+			     ui->snap_own_ann_y[id] != ev->y)) {
+				enqueue_slide_anim(ui, &own_pieces(ui)[id],
+						   ui->board.own[id].type,
+						   ui->snap_own_ann_x[id],
+						   ui->snap_own_ann_y[id],
+						   ui->snap_own_x[id],
+						   ui->snap_own_y[id],
+						   ev->x, ev->y);
+			}
+			enqueue_impact_anim(ui, ev->x, ev->y);
+		} else if (ev->actor != ui->board.side &&
+			   id >= 0 && id < NUM_PIECES) {
+			if (!ui->enemy_animated_this_step[id]) {
+				int sx = ui->snap_enemy_x[id];
+				int sy = ui->snap_enemy_y[id];
+				int tx = ui->active_enemy_target_x[id];
+				int ty = ui->active_enemy_target_y[id];
+
+				ui->enemy_animated_this_step[id] = 1;
+				if (sx != UNKNOWN_POS &&
+				    (sx != ev->x || sy != ev->y)) {
+					if (tx == UNKNOWN_POS) {
+						tx = ev->x;
+						ty = ev->y;
+					}
+					enqueue_slide_anim(ui,
+							   &enemy_pieces(ui)[id],
+							   ui->board.enemy[id].type,
+							   sx, sy, tx, ty,
+							   ev->x, ev->y);
+				} else if (sx == UNKNOWN_POS) {
+					enqueue_appear_anim(ui,
+							    &enemy_pieces(ui)[id],
+							    ev->x, ev->y);
+				}
+			}
+			enqueue_impact_anim(ui, ev->x, ev->y);
+		}
+
 		record_recent_collision(ui, ev->x, ev->y, buf);
 		append_log(ui, buf, 1);
 	} else {
@@ -452,6 +730,7 @@ static void reset_managed_game(struct gui *ui)
 				SIDE_RED : SIDE_BLUE;
 
 	cancel_poll_timer(ui);
+	clear_animations(ui);
 	if (ui->opponent != NULL) {
 		dmost_opponent_destroy(ui->opponent);
 		ui->opponent = NULL;
@@ -515,6 +794,10 @@ static gboolean opponent_turn_timer_cb(gpointer data)
 		return FALSE;
 	}
 
+	if (ui->anim_count > 0)
+		return TRUE;
+
+	snapshot_board_for_anim(ui);
 	rc = dmost_opponent_poll(ui->opponent, &msg);
 	if (rc == 1) {
 		if (dmost_handle_message(&ui->board, &msg, &reply, &has_reply)) {
@@ -522,6 +805,7 @@ static gboolean opponent_turn_timer_cb(gpointer data)
 				dmost_opponent_send(ui->opponent, &reply);
 			pump_resolution_messages(ui);
 		}
+		finalize_enemy_move_anims(ui);
 		sync_ui_from_board(ui);
 		update_status(ui);
 		gtk_widget_queue_draw(ui->drawing_area);
@@ -628,6 +912,7 @@ static void quit_clicked(__attribute__((unused)) GtkWidget *widget,
 
 	if (ui != NULL) {
 		cancel_poll_timer(ui);
+		clear_animations(ui);
 		if (ui->opponent != NULL) {
 			dmost_opponent_destroy(ui->opponent);
 			ui->opponent = NULL;
@@ -674,18 +959,20 @@ static void pass_clicked(__attribute__((unused)) GtkWidget *widget,
 		return;
 	if (!dmost_has_any_legal_move(&ui->board))
 		clear_recent_collisions(ui);
+	snapshot_board_for_anim(ui);
 	if (!dmost_initiate_pass(&ui->board, &msg))
 		return;
 
 	dmost_opponent_send(ui->opponent, &msg);
 	pump_resolution_messages(ui);
+	finalize_enemy_move_anims(ui);
 	sync_ui_from_board(ui);
 	update_status(ui);
 	gtk_widget_queue_draw(ui->drawing_area);
 
 	if (ui->board.phase == PHASE_PLAYING &&
 	    ui->board.current_turn != ui->board.side)
-		schedule_opponent_poll(ui, ui->recent_collision_count > 0 ? 900 : 300);
+		schedule_opponent_poll(ui, 350);
 }
 
 static gint key_press_cb(__attribute__((unused)) GtkWidget *widget,
@@ -765,6 +1052,20 @@ static int invert(int y)
 	return 9 - y;
 }
 
+static int is_piece_queued_in_anim(const struct gui *ui, const struct piece *p)
+{
+	int i;
+
+	for (i = 0; i < ui->anim_count; i++) {
+		int idx = (ui->anim_head + i) % ANIM_QUEUE_CAP;
+		const struct anim_step *s = &ui->anim_queue[idx];
+
+		if (s->kind == ANIM_SLIDE && s->piece == p)
+			return 1;
+	}
+	return 0;
+}
+
 static void count_square_stack(const struct piece *target, struct piece *list,
 			       int *stack_total, int *stack_idx, int before)
 {
@@ -772,7 +1073,8 @@ static void count_square_stack(const struct piece *target, struct piece *list,
 
 	for (j = 0; list[j].name != NULL; j++) {
 		if (list[j].x == UNKNOWN || !list[j].alive ||
-		    &list[j] == ui.holding)
+		    &list[j] == ui.holding ||
+		    is_piece_queued_in_anim(&ui, &list[j]))
 			continue;
 		if (list[j].x == target->x && list[j].y == target->y) {
 			if (before || &list[j] < target)
@@ -795,7 +1097,7 @@ static void draw_pieces_on_board(cairo_t *cr, struct piece *p)
 
 		if (p[i].x == UNKNOWN || !p[i].alive)
 			continue;
-		if (&p[i] == ui.holding)
+		if (&p[i] == ui.holding || is_piece_queued_in_anim(&ui, &p[i]))
 			continue;
 
 		if (p == p1) {
@@ -910,12 +1212,14 @@ static int has_live_piece_at(int x, int y)
 
 	for (j = 0; p1[j].name != NULL; j++) {
 		if (p1[j].alive && p1[j].x == x && p1[j].y == y &&
-		    &p1[j] != ui.holding)
+		    &p1[j] != ui.holding &&
+		    !is_piece_queued_in_anim(&ui, &p1[j]))
 			return 1;
 	}
 	for (j = 0; p2[j].name != NULL; j++) {
 		if (p2[j].alive && p2[j].x == x && p2[j].y == y &&
-		    &p2[j] != ui.holding)
+		    &p2[j] != ui.holding &&
+		    !is_piece_queued_in_anim(&ui, &p2[j]))
 			return 1;
 	}
 	return 0;
@@ -928,7 +1232,8 @@ static void count_dead_square_stack(const struct piece *target,
 	int j;
 
 	for (j = 0; list[j].name != NULL; j++) {
-		if (list[j].alive || list[j].x == UNKNOWN)
+		if (list[j].alive || list[j].x == UNKNOWN ||
+		    is_piece_queued_in_anim(&ui, &list[j]))
 			continue;
 		if (list[j].x == target->x && list[j].y == target->y) {
 			if (before || &list[j] < target)
@@ -948,7 +1253,8 @@ static void draw_dead_pieces_on_board_list(cairo_t *cr, struct piece *p)
 		int dead_total = 0, dead_idx = 0, live_here;
 		double cx, cy, scale;
 
-		if (p[i].alive || p[i].x == UNKNOWN)
+		if (p[i].alive || p[i].x == UNKNOWN ||
+		    is_piece_queued_in_anim(&ui, &p[i]))
 			continue;
 
 		if (p == p1) {
@@ -1212,6 +1518,138 @@ static void highlight_recent_collisions(cairo_t *cr, struct gui *ui)
 	}
 }
 
+static void draw_active_animation(cairo_t *cr, struct gui *ui)
+{
+	const struct anim_step *step;
+	double cell_w = ui->xdim / (12.0 * ui->piece_box_open);
+	double cell_h = ui->ydim / 12.0;
+	double radius = MIN(cell_w, cell_h) * 0.375;
+	double t, ease;
+
+	if (ui->anim_count <= 0)
+		return;
+
+	step = &ui->anim_queue[ui->anim_head];
+	t = (step->duration_ms > 0) ?
+	    ((double)step->elapsed_ms / (double)step->duration_ms) : 1.0;
+	if (t < 0.0)
+		t = 0.0;
+	if (t > 1.0)
+		t = 1.0;
+	ease = t * t * (3.0 - 2.0 * t);
+
+	if (step->kind == ANIM_SLIDE && step->path_len >= 2 &&
+	    step->piece != NULL) {
+		double total_segs = (double)(step->path_len - 1);
+		double pos = ease * total_segs;
+		int seg = (int)pos;
+		double frac, x0, y0, x1, y1, ix, iy;
+		int k;
+
+		if (seg >= step->path_len - 1)
+			seg = step->path_len - 2;
+		frac = pos - (double)seg;
+
+		x0 = (step->path[seg].x + 1.5) * cell_w;
+		y0 = (invert(step->path[seg].y) + 1.5) * cell_h;
+		x1 = (step->path[seg + 1].x + 1.5) * cell_w;
+		y1 = (invert(step->path[seg + 1].y) + 1.5) * cell_h;
+		ix = x0 + (x1 - x0) * frac;
+		iy = y0 + (y1 - y0) * frac;
+
+		/* Animated glowing trail along path */
+		cairo_save(cr);
+		cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+		cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+		cairo_set_line_width(cr, MIN(cell_w, cell_h) * 0.14);
+		cairo_set_source_rgba(cr, step->r, step->g, step->b, 0.72);
+		cairo_move_to(cr, (step->path[0].x + 1.5) * cell_w,
+			      (invert(step->path[0].y) + 1.5) * cell_h);
+		for (k = 1; k <= seg; k++) {
+			cairo_line_to(cr, (step->path[k].x + 1.5) * cell_w,
+				      (invert(step->path[k].y) + 1.5) * cell_h);
+		}
+		cairo_line_to(cr, ix, iy);
+		cairo_stroke(cr);
+		cairo_restore(cr);
+
+		/* Bright moving halo */
+		cairo_save(cr);
+		cairo_set_line_width(cr, 2.5);
+		cairo_set_source_rgba(cr, 1.0, 1.0, 0.7, 0.6);
+		cairo_arc(cr, ix, iy, radius * 1.32, 0.0, 2.0 * M_PI);
+		cairo_stroke(cr);
+		cairo_restore(cr);
+
+		/* Piece disk & label */
+		cairo_save(cr);
+		cairo_arc(cr, ix, iy, radius, 0.0, 2.0 * M_PI);
+		cairo_set_source_rgba(cr, step->r, step->g, step->b, 0.40);
+		cairo_fill_preserve(cr);
+		cairo_stroke(cr);
+		cairo_restore(cr);
+
+		cairo_save(cr);
+		cairo_set_line_width(cr, MIN(ui->xdim, ui->ydim) / 180.0);
+		cairo_set_source_rgba(cr, step->r, step->g, step->b, 1.0);
+		cairo_arc(cr, ix, iy, radius * 1.1, 0.0, 2.0 * M_PI);
+		cairo_stroke(cr);
+		cairo_restore(cr);
+
+		cairo_save(cr);
+		cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 1.0);
+		if (radius > 12.0)
+			draw_centered_text(cr, ix, iy,
+					   MIN(ui->xdim, ui->ydim) / 32.0,
+					   step->piece->name);
+		cairo_restore(cr);
+	} else if (step->kind == ANIM_APPEAR) {
+		double cx = (step->x + 1.5) * cell_w;
+		double cy = (invert(step->y) + 1.5) * cell_h;
+		double alpha = 0.92 * (1.0 - t);
+
+		cairo_save(cr);
+		cairo_set_line_width(cr, 3.0);
+		cairo_set_source_rgba(cr, step->r, step->g, step->b, alpha);
+		cairo_arc(cr, cx, cy, radius * (1.05 + 1.35 * ease),
+			  0.0, 2.0 * M_PI);
+		cairo_stroke(cr);
+		cairo_set_line_width(cr, 2.0);
+		cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, alpha * 0.85);
+		cairo_arc(cr, cx, cy, radius * (0.95 + 0.70 * ease),
+			  0.0, 2.0 * M_PI);
+		cairo_stroke(cr);
+		cairo_restore(cr);
+	} else if (step->kind == ANIM_IMPACT) {
+		double cx = (step->x + 1.5) * cell_w;
+		double cy = (invert(step->y) + 1.5) * cell_h;
+		double alpha = 0.95 * (1.0 - t);
+		double inner_r = radius * 0.35;
+		double outer_r = radius * (0.85 + 1.25 * ease);
+		int k;
+
+		cairo_save(cr);
+		cairo_set_line_width(cr, 3.5);
+		cairo_set_source_rgba(cr, 1.0, 0.72, 0.15, alpha);
+		cairo_arc(cr, cx, cy, radius * (0.55 + 1.75 * ease),
+			  0.0, 2.0 * M_PI);
+		cairo_stroke(cr);
+
+		cairo_set_line_width(cr, 2.2);
+		cairo_set_source_rgba(cr, 1.0, 0.92, 0.55, alpha);
+		for (k = 0; k < 8; k++) {
+			double ang = 2.0 * M_PI * (double)k / 8.0;
+
+			cairo_move_to(cr, cx + cos(ang) * inner_r,
+				      cy + sin(ang) * inner_r);
+			cairo_line_to(cr, cx + cos(ang) * outer_r,
+				      cy + sin(ang) * outer_r);
+		}
+		cairo_stroke(cr);
+		cairo_restore(cr);
+	}
+}
+
 static gboolean on_expose_drawing_area(GtkWidget *w,
 				       __attribute__((unused)) GdkEventExpose *event,
 				       gpointer p)
@@ -1312,6 +1750,7 @@ static gboolean on_expose_drawing_area(GtkWidget *w,
 	draw_dead_pieces_on_board(cr);
 	draw_pieces_on_board(cr, p1);
 	draw_pieces_on_board(cr, p2);
+	draw_active_animation(cr, ui);
 	draw_pieces_off_board(cr, p1, &off_board_piece_count);
 	draw_pieces_off_board(cr, p2, &off_board_piece_count);
 	if (ui->holding != NULL)
@@ -1480,6 +1919,7 @@ static gboolean on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 							struct dmost_msg msg;
 
 							clear_recent_collisions(ui);
+							snapshot_board_for_anim(ui);
 							if (dmost_initiate_move(&ui->board,
 										ui->holding->id,
 										tmpx, tmpy,
@@ -1488,13 +1928,14 @@ static gboolean on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 								if (ui->opponent != NULL)
 									dmost_opponent_send(ui->opponent, &msg);
 								pump_resolution_messages(ui);
+								finalize_enemy_move_anims(ui);
 								sync_ui_from_board(ui);
 								update_status(ui);
 								gtk_widget_queue_draw(w);
 								if (ui->board.phase == PHASE_RESOLVING ||
 								    (ui->board.phase == PHASE_PLAYING &&
 								     ui->board.current_turn != ui->board.side))
-									schedule_opponent_poll(ui, ui->recent_collision_count > 0 ? 900 : 300);
+									schedule_opponent_poll(ui, 350);
 								return TRUE;
 							}
 						}
@@ -1526,6 +1967,7 @@ static gboolean on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 			if (ui->board.phase != PHASE_PLAYING ||
 			    ui->board.current_turn != ui->board.side)
 				return TRUE;
+			clear_animations(ui);
 		}
 
 		{
