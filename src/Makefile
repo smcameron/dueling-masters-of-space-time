@@ -3,6 +3,8 @@ CFLAGS=-Wall -Wextra -Wno-deprecated-declarations -g
 ENGINE_CFLAGS=-Wall -Wextra -Werror -g
 GTK_CFLAGS = `pkg-config --cflags gtk+-2.0 gthread-2.0`
 GTK_LDFLAGS = `pkg-config --libs gtk+-2.0 gthread-2.0`
+SDL_CFLAGS = `pkg-config --cflags sdl2 libpng`
+SDL_LDFLAGS = `pkg-config --libs sdl2 libpng`
 
 all:	dmost
 
@@ -14,6 +16,12 @@ game.o:	game.c game.h
 
 ai.o:	ai.c ai.h opponent.h game.h
 	gcc -c ${ENGINE_CFLAGS} ai.c
+
+sdl_font.o:	sdl_font.c sdl_font.h
+	gcc -c ${ENGINE_CFLAGS} ${SDL_CFLAGS} sdl_font.c
+
+sdl_gfx.o:	sdl_gfx.c sdl_gfx.h
+	gcc -c ${ENGINE_CFLAGS} ${SDL_CFLAGS} sdl_gfx.c
 
 test_game:	test_game.c game.o game.h
 	gcc -o test_game ${ENGINE_CFLAGS} test_game.c game.o
@@ -28,6 +36,6 @@ test:	test_game test_ai
 	./test_ai
 
 clean:
-	rm -f dmost test_game test_ai game.o ai.o
+	rm -f dmost test_game test_ai game.o ai.o sdl_font.o sdl_gfx.o
 
 
