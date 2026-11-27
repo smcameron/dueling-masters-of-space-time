@@ -1,15 +1,13 @@
 
-CFLAGS=-Wall -Wextra -Wno-deprecated-declarations -g
+CFLAGS=-Wall -Wextra -g
 ENGINE_CFLAGS=-Wall -Wextra -Werror -g
-GTK_CFLAGS = `pkg-config --cflags gtk+-2.0 gthread-2.0`
-GTK_LDFLAGS = `pkg-config --libs gtk+-2.0 gthread-2.0`
 SDL_CFLAGS = `pkg-config --cflags sdl2 libpng`
 SDL_LDFLAGS = `pkg-config --libs sdl2 libpng`
 
 all:	dmost
 
-dmost:	dmost.c game.o ai.o game.h ai.h opponent.h
-	gcc -o dmost ${CFLAGS} ${GTK_CFLAGS} dmost.c game.o ai.o ${GTK_LDFLAGS} -lm
+dmost:	dmost.c game.o ai.o sdl_font.o sdl_gfx.o sdl_ui.o game.h ai.h opponent.h sdl_font.h sdl_gfx.h sdl_ui.h
+	gcc -o dmost ${CFLAGS} ${SDL_CFLAGS} dmost.c game.o ai.o sdl_font.o sdl_gfx.o sdl_ui.o ${SDL_LDFLAGS} -lm
 
 game.o:	game.c game.h
 	gcc -c ${ENGINE_CFLAGS} game.c

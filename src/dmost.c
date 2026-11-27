@@ -18,23 +18,25 @@
     Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
  */
+#include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#ifndef __APPLE__
-#include <malloc.h>
-#endif
-#include <math.h>
-#include <stdint.h>
 
-#include <gtk/gtk.h>
-#include <cairo.h>
-#include <gdk/gdkkeysyms.h>
+#include <SDL.h>
 
 #include "game.h"
 #include "opponent.h"
 #include "ai.h"
+#include "sdl_font.h"
+#include "sdl_gfx.h"
+#include "sdl_ui.h"
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 #define ARRAYSIZE(x) (sizeof((x)) / sizeof((x)[0]))
 #ifndef MIN
@@ -42,7 +44,10 @@
 #endif
 
 #define ANIM_QUEUE_CAP 32
-#define ANIM_TICK_MS 30
+#define TOOLBAR_BTN_H 28.0f
+#define TOOLBAR_PAD 6.0f
+#define STATUS_BAR_H 34.0f
+#define LOG_BOX_H 92.0f
 
 enum anim_kind {
 	ANIM_SLIDE = 1,
@@ -117,25 +122,39 @@ struct piece {
 struct piece *p1, *p2;
 
 struct gui {
-	GtkWidget *window;
-	GtkWidget *help;
-	GtkWidget *hbox;
-	GtkWidget *drawing_area;
-	GtkWidget *mode_combo_box;
-	GtkWidget *redblue_combo_box;
-	GtkWidget *opponent_combo_box;
-	GtkWidget *auto_setup_button;
-	GtkWidget *new_game_button;
-	GtkWidget *pass_button;
-	GtkWidget *play_again_button;
-	GtkWidget *status_label;
-	GtkWidget *collision_label;
-	GtkWidget *log_view;
-	GtkTextBuffer *log_buffer;
-	GtkTextTag *log_collision_tag;
+	SDL_Window *window;
+	SDL_Renderer *renderer;
+	struct sdl_font font;
+	SDL_Texture *galaxy_tex;
+	int galaxy_w, galaxy_h;
+	int win_w, win_h;
+
+	SDL_FRect toolbar_rect;
+	SDL_FRect board_rect;
+	SDL_FRect status_rect;
+	SDL_FRect collision_rect;
+
+	struct sdl_dropdown mode_dd;
+	struct sdl_dropdown opponent_dd;
+	struct sdl_dropdown redblue_dd;
+	struct sdl_button auto_setup_btn;
+	struct sdl_button new_game_btn;
+	struct sdl_button invert_btn;
+	struct sdl_button help_btn;
+	struct sdl_button quit_btn;
+	struct sdl_button pass_btn;
+	struct sdl_button play_again_btn;
+
+	char status_text[256];
+	struct sdl_log_view log_view;
+	struct sdl_modal help_modal;
+	struct sdl_modal game_over_modal;
+	const char *hover_tooltip;
+
 	int xdim, ydim;
 	double piece_box_open;
 	int inverted;
+	int win_mousex, win_mousey;
 	int mousex, mousey;
 	struct piece *holding;
 	int playing_as;
@@ -149,10 +168,10 @@ struct gui {
 	uint8_t visited[BOARD_SIZE][BOARD_SIZE];
 
 	int use_opponent;
-	int suppress_combo_cb;
 	struct player_board board;
 	struct dmost_opponent *opponent;
-	guint poll_timer_id;
+	int poll_scheduled;
+	Uint32 poll_due_ms;
 	uint32_t setup_rng;
 	uint32_t game_counter;
 	struct square recent_collisions[32];
@@ -162,7 +181,7 @@ struct gui {
 	struct anim_step anim_queue[ANIM_QUEUE_CAP];
 	int anim_head;
 	int anim_count;
-	guint anim_timer_id;
+	Uint32 anim_last_tick_ms;
 
 	int snap_own_ann_x[NUM_PIECES];
 	int snap_own_ann_y[NUM_PIECES];
@@ -175,20 +194,63 @@ struct gui {
 	int active_enemy_target_y[NUM_PIECES];
 	uint8_t enemy_animated_this_step[NUM_PIECES];
 
-	GtkWidget *game_over_dialog;
-	guint game_over_timer_id;
+	int game_over_scheduled;
+	Uint32 game_over_due_ms;
 	int game_over_pending;
 	int game_over_shown;
+
+	int dirty;
+	int quit;
 };
 
-static GdkColor black;
 static struct gui ui;
 
-static void generic_draw_piece_on_board(struct piece *p, cairo_t *cr,
+static const char *const mode_items[] = {
+	"Board Setup",
+	"Play Game",
+	"Free form",
+	"Begin New Game",
+};
+
+static const char *const opponent_items[] = {
+	"vs Computer",
+	"Manual (Offline)",
+};
+
+static const char *const redblue_items[] = {
+	"Play as Red",
+	"Play as Blue",
+};
+
+static const char *const help_instructions =
+"   Instructions \xE2\x80\x94 Dueling Masters of Space Time\n"
+"   \n"
+"   MODE 1: vs Computer (Default)\n"
+"   1. Choose 'Play as Red' (moves first) or 'Play as Blue' (Computer moves first).\n"
+"   2. Arrange all 18 of your pieces on your half of the board, or click\n"
+"      'Auto Setup' for a randomized defensive/scouting formation.\n"
+"      (Asteroids and your Home Planet must occupy squares by themselves;\n"
+"      fighters may stack with other friendly fighters.)\n"
+"   3. Select 'Play Game' from the top-left menu to begin.\n"
+"   4. On your turn, left-click a piece and click a highlighted destination\n"
+"      square. Pieces enter 'in transit' until moved again; collisions are\n"
+"      resolved recursively and logged at the bottom of the window.\n"
+"      Right-click any square to toggle a personal marker.\n"
+"   5. Destroy the opponent's Home Planet to win!\n"
+"   \n"
+"   MODE 2: Manual (Offline)\n"
+"   1. Select 'Manual (Offline)' from the opponent menu to play with a human\n"
+"      opponent over voice/chat/across a screen using your own boards.\n"
+"   2. Announce which piece you are moving and where it is moving FROM\n"
+"      (never reveal where it is moving TO).\n"
+"   3. Piece strengths (strongest to weakest): A, W, B, X, Y, Z, HP.\n"
+"      Asteroids destroy anything touching them and are destroyed too.\n"
+"   \n";
+
+static void generic_draw_piece_on_board(struct piece *p, struct gui *ui,
 					double radius_scale);
-static gboolean opponent_turn_timer_cb(gpointer data);
-static gboolean anim_timer_cb(gpointer data);
 static void reset_managed_game(struct gui *ui);
+static void layout_ui(struct gui *ui);
 
 static struct piece *own_pieces(const struct gui *ui)
 {
@@ -207,45 +269,22 @@ static int is_managed_mode(const struct gui *ui)
 
 static void append_log(struct gui *ui, const char *text, int is_collision)
 {
-	GtkTextIter end;
-	gint start_offset;
-
-	if (ui->log_buffer == NULL)
-		return;
-	gtk_text_buffer_get_end_iter(ui->log_buffer, &end);
-	if (gtk_text_buffer_get_char_count(ui->log_buffer) > 0)
-		gtk_text_buffer_insert(ui->log_buffer, &end, "\n", 1);
-	gtk_text_buffer_get_end_iter(ui->log_buffer, &end);
-	start_offset = gtk_text_iter_get_offset(&end);
-	gtk_text_buffer_insert(ui->log_buffer, &end, text, -1);
-	if (is_collision && ui->log_collision_tag != NULL) {
-		GtkTextIter start;
-
-		gtk_text_buffer_get_iter_at_offset(ui->log_buffer, &start,
-						    start_offset);
-		gtk_text_buffer_get_end_iter(ui->log_buffer, &end);
-		gtk_text_buffer_apply_tag(ui->log_buffer, ui->log_collision_tag,
-					  &start, &end);
-	}
-	if (ui->log_view != NULL) {
-		gtk_text_buffer_get_end_iter(ui->log_buffer, &end);
-		gtk_text_view_scroll_to_iter(GTK_TEXT_VIEW(ui->log_view),
-					     &end, 0.0, FALSE, 0.0, 1.0);
-	}
+	sdl_log_append(&ui->log_view, text, is_collision);
+	ui->dirty = 1;
 }
 
 static void clear_log(struct gui *ui)
 {
-	if (ui->log_buffer != NULL)
-		gtk_text_buffer_set_text(ui->log_buffer, "", 0);
+	sdl_log_clear(&ui->log_view);
+	ui->dirty = 1;
 }
 
 static void clear_recent_collisions(struct gui *ui)
 {
 	ui->recent_collision_count = 0;
 	ui->last_collision_text[0] = '\0';
-	if (ui->collision_label != NULL)
-		gtk_label_set_text(GTK_LABEL(ui->collision_label), "");
+	layout_ui(ui);
+	ui->dirty = 1;
 }
 
 static void record_recent_collision(struct gui *ui, int x, int y,
@@ -278,55 +317,26 @@ static void record_recent_collision(struct gui *ui, int x, int y,
 				 sizeof(ui->last_collision_text) - cur,
 				 "  |  %s", text);
 	}
+	layout_ui(ui);
+	ui->dirty = 1;
 }
 
 static void dismiss_game_over_dialog(struct gui *ui)
 {
-	if (ui->game_over_timer_id != 0) {
-		g_source_remove(ui->game_over_timer_id);
-		ui->game_over_timer_id = 0;
-	}
-	if (ui->game_over_dialog != NULL) {
-		GtkWidget *dlg = ui->game_over_dialog;
-		ui->game_over_dialog = NULL;
-		gtk_widget_destroy(dlg);
-	}
+	ui->game_over_scheduled = 0;
+	sdl_modal_close(&ui->game_over_modal);
 	ui->game_over_pending = 0;
 	ui->game_over_shown = 0;
 }
 
-static void on_game_over_dialog_response(GtkDialog *dialog, gint response_id,
-					 gpointer data)
+static void open_game_over_modal(struct gui *ui)
 {
-	struct gui *ui = data;
-
-	ui->game_over_dialog = NULL;
-	gtk_widget_destroy(GTK_WIDGET(dialog));
-	if (response_id == GTK_RESPONSE_ACCEPT)
-		reset_managed_game(ui);
-	else if (ui->drawing_area != NULL)
-		gtk_widget_queue_draw(ui->drawing_area);
-}
-
-static gboolean show_game_over_dialog_cb(gpointer data)
-{
-	struct gui *ui = data;
 	const char *title;
 	const char *primary;
 	char secondary[160];
-	GtkWidget *dlg;
 	int human_won;
 
-	if (!is_managed_mode(ui) || ui->board.phase != PHASE_GAME_OVER ||
-	    ui->game_over_shown) {
-		ui->game_over_timer_id = 0;
-		return FALSE;
-	}
-
-	if (ui->anim_count > 0)
-		return TRUE;
-
-	ui->game_over_timer_id = 0;
+	ui->game_over_scheduled = 0;
 	ui->game_over_pending = 0;
 	ui->game_over_shown = 1;
 
@@ -336,20 +346,20 @@ static gboolean show_game_over_dialog_cb(gpointer data)
 		      ui->board.result == RESULT_BLUE_WINS));
 
 	if (ui->board.result == RESULT_DRAW) {
-		title = "Game Over — Draw";
+		title = "Game Over \xE2\x80\x94 Draw";
 		primary = "Game Over: Draw!";
 		snprintf(secondary, sizeof(secondary),
 			 "Neither player can destroy the other's Home Planet (turn %d).",
 			 ui->board.turn_number);
 	} else if (human_won) {
-		title = "Game Over — Victory!";
+		title = "Game Over \xE2\x80\x94 Victory!";
 		primary = (ui->board.result == RESULT_RED_WINS) ?
 			  "You Win! (Red Wins)" : "You Win! (Blue Wins)";
 		snprintf(secondary, sizeof(secondary),
 			 "You destroyed the opponent's Home Planet on turn %d!",
 			 ui->board.turn_number);
 	} else {
-		title = "Game Over — Defeat";
+		title = "Game Over \xE2\x80\x94 Defeat";
 		primary = (ui->board.result == RESULT_RED_WINS) ?
 			  "You Lose! (Red Wins)" : "You Lose! (Blue Wins)";
 		snprintf(secondary, sizeof(secondary),
@@ -357,78 +367,25 @@ static gboolean show_game_over_dialog_cb(gpointer data)
 			 ui->board.turn_number);
 	}
 
-	dlg = gtk_message_dialog_new(GTK_WINDOW(ui->window),
-				     GTK_DIALOG_DESTROY_WITH_PARENT,
-				     GTK_MESSAGE_INFO,
-				     GTK_BUTTONS_NONE,
-				     "%s", primary);
-	gtk_window_set_title(GTK_WINDOW(dlg), title);
-	gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dlg),
-						 "%s", secondary);
-	gtk_dialog_add_button(GTK_DIALOG(dlg), "View Board",
-			      GTK_RESPONSE_CLOSE);
-	gtk_dialog_add_button(GTK_DIALOG(dlg), "Play Again",
-			      GTK_RESPONSE_ACCEPT);
-	gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_ACCEPT);
-	g_signal_connect(dlg, "response",
-			 G_CALLBACK(on_game_over_dialog_response), ui);
-	ui->game_over_dialog = dlg;
-	gtk_widget_show_all(dlg);
-	if (ui->drawing_area != NULL)
-		gtk_widget_queue_draw(ui->drawing_area);
-	return FALSE;
+	sdl_modal_open_message(&ui->game_over_modal, title, primary, secondary,
+			       "Play Again", "View Board");
+	sdl_modal_layout(&ui->game_over_modal, ui->win_w, ui->win_h);
+	ui->dirty = 1;
 }
 
 static void schedule_game_over_dialog(struct gui *ui)
 {
-	if (ui->game_over_shown || ui->game_over_timer_id != 0)
+	if (ui->game_over_shown || ui->game_over_scheduled)
 		return;
 	ui->game_over_pending = 1;
-	ui->game_over_timer_id = gdk_threads_add_timeout(
-		300, show_game_over_dialog_cb, ui);
+	ui->game_over_scheduled = 1;
+	ui->game_over_due_ms = SDL_GetTicks() + 300;
 }
 
 static void clear_animations(struct gui *ui)
 {
-	if (ui->anim_timer_id != 0) {
-		g_source_remove(ui->anim_timer_id);
-		ui->anim_timer_id = 0;
-	}
 	ui->anim_head = 0;
 	ui->anim_count = 0;
-}
-
-static gboolean anim_timer_cb(gpointer data)
-{
-	struct gui *ui = data;
-	struct anim_step *step;
-
-	if (ui->anim_count <= 0) {
-		ui->anim_timer_id = 0;
-		if (ui->game_over_pending && !ui->game_over_shown &&
-		    ui->game_over_timer_id == 0)
-			schedule_game_over_dialog(ui);
-		return FALSE;
-	}
-
-	step = &ui->anim_queue[ui->anim_head];
-	step->elapsed_ms += ANIM_TICK_MS;
-	if (step->elapsed_ms >= step->duration_ms) {
-		ui->anim_head = (ui->anim_head + 1) % ANIM_QUEUE_CAP;
-		ui->anim_count--;
-	}
-
-	if (ui->drawing_area != NULL)
-		gtk_widget_queue_draw(ui->drawing_area);
-
-	if (ui->anim_count <= 0) {
-		ui->anim_timer_id = 0;
-		if (ui->game_over_pending && !ui->game_over_shown &&
-		    ui->game_over_timer_id == 0)
-			schedule_game_over_dialog(ui);
-		return FALSE;
-	}
-	return TRUE;
 }
 
 static void enqueue_anim(struct gui *ui, const struct anim_step *step)
@@ -437,13 +394,12 @@ static void enqueue_anim(struct gui *ui, const struct anim_step *step)
 
 	if (ui->anim_count >= ANIM_QUEUE_CAP)
 		return;
+	if (ui->anim_count == 0)
+		ui->anim_last_tick_ms = SDL_GetTicks();
 	tail = (ui->anim_head + ui->anim_count) % ANIM_QUEUE_CAP;
 	ui->anim_queue[tail] = *step;
 	ui->anim_count++;
-
-	if (ui->anim_timer_id == 0)
-		ui->anim_timer_id = gdk_threads_add_timeout(
-			ANIM_TICK_MS, anim_timer_cb, ui);
+	ui->dirty = 1;
 }
 
 static int build_partial_path(enum piece_type type, int sx, int sy,
@@ -697,136 +653,111 @@ static int count_placed_own_pieces(const struct player_board *b)
 
 static void update_status(struct gui *ui)
 {
-	char msg[160];
-
-	if (ui->status_label == NULL)
-		return;
-
 	if (!ui->use_opponent) {
 		if (ui->mode == MODE_FREE)
-			snprintf(msg, sizeof(msg),
+			snprintf(ui->status_text, sizeof(ui->status_text),
 				 "Manual Free-form mode (no rules enforced)");
 		else if (ui->mode == MODE_BOARD_SETUP)
-			snprintf(msg, sizeof(msg),
+			snprintf(ui->status_text, sizeof(ui->status_text),
 				 "Manual Setup (%s): arrange your pieces",
 				 ui->playing_as == PLAYING_AS_RED ? "Red" : "Blue");
 		else
-			snprintf(msg, sizeof(msg),
+			snprintf(ui->status_text, sizeof(ui->status_text),
 				 "Manual Play (%s): move pieces & communicate externally",
 				 ui->playing_as == PLAYING_AS_RED ? "Red" : "Blue");
-		gtk_label_set_text(GTK_LABEL(ui->status_label), msg);
-		gtk_widget_set_sensitive(ui->auto_setup_button, FALSE);
-		gtk_widget_set_sensitive(ui->pass_button, FALSE);
-		if (ui->play_again_button != NULL)
-			gtk_widget_hide(ui->play_again_button);
+		ui->auto_setup_btn.enabled = 0;
+		ui->pass_btn.enabled = 0;
+		ui->play_again_btn.visible = 0;
+		layout_ui(ui);
+		ui->dirty = 1;
 		return;
 	}
 
 	if (ui->mode == MODE_FREE) {
-		gtk_label_set_text(GTK_LABEL(ui->status_label),
-				   "Free-form mode (vs Computer paused)");
-		gtk_widget_set_sensitive(ui->auto_setup_button, FALSE);
-		gtk_widget_set_sensitive(ui->pass_button, FALSE);
-		if (ui->play_again_button != NULL)
-			gtk_widget_hide(ui->play_again_button);
+		snprintf(ui->status_text, sizeof(ui->status_text),
+			 "Free-form mode (vs Computer paused)");
+		ui->auto_setup_btn.enabled = 0;
+		ui->pass_btn.enabled = 0;
+		ui->play_again_btn.visible = 0;
+		layout_ui(ui);
+		ui->dirty = 1;
 		return;
 	}
 
 	if (ui->board.phase == PHASE_SETUP) {
 		int placed = count_placed_own_pieces(&ui->board);
-		snprintf(msg, sizeof(msg),
+		snprintf(ui->status_text, sizeof(ui->status_text),
 			 "Setup (%s): place all %d pieces (%d/%d placed) or click Auto Setup, then select Play Game",
 			 ui->board.side == SIDE_RED ? "Red" : "Blue",
 			 NUM_PIECES, placed, NUM_PIECES);
-		gtk_widget_set_sensitive(ui->auto_setup_button, TRUE);
-		gtk_widget_set_sensitive(ui->pass_button, FALSE);
+		ui->auto_setup_btn.enabled = 1;
+		ui->pass_btn.enabled = 0;
 	} else if (ui->board.phase == PHASE_GAME_OVER) {
 		switch (ui->board.result) {
 		case RESULT_RED_WINS:
-			snprintf(msg, sizeof(msg), "Game Over: Red wins! (%s)",
+			snprintf(ui->status_text, sizeof(ui->status_text),
+				 "Game Over: Red wins! (%s)",
 				 ui->board.side == SIDE_RED ? "You win!" : "Computer wins.");
 			break;
 		case RESULT_BLUE_WINS:
-			snprintf(msg, sizeof(msg), "Game Over: Blue wins! (%s)",
+			snprintf(ui->status_text, sizeof(ui->status_text),
+				 "Game Over: Blue wins! (%s)",
 				 ui->board.side == SIDE_BLUE ? "You win!" : "Computer wins.");
 			break;
 		case RESULT_DRAW:
 		default:
-			snprintf(msg, sizeof(msg), "Game Over: Draw!");
+			snprintf(ui->status_text, sizeof(ui->status_text),
+				 "Game Over: Draw!");
 			break;
 		}
-		gtk_widget_set_sensitive(ui->auto_setup_button, FALSE);
-		gtk_widget_set_sensitive(ui->pass_button, FALSE);
+		ui->auto_setup_btn.enabled = 0;
+		ui->pass_btn.enabled = 0;
 	} else if (ui->board.phase == PHASE_RESOLVING) {
-		snprintf(msg, sizeof(msg), "Resolving collisions...");
-		gtk_widget_set_sensitive(ui->auto_setup_button, FALSE);
-		gtk_widget_set_sensitive(ui->pass_button, FALSE);
+		snprintf(ui->status_text, sizeof(ui->status_text),
+			 "Resolving collisions...");
+		ui->auto_setup_btn.enabled = 0;
+		ui->pass_btn.enabled = 0;
 	} else if (ui->board.current_turn == ui->board.side) {
 		int can_move = dmost_has_any_legal_move(&ui->board);
 
 		if (can_move) {
-			snprintf(msg, sizeof(msg),
+			snprintf(ui->status_text, sizeof(ui->status_text),
 				 "Turn %d: Your turn (%s) - click a piece to move",
 				 ui->board.turn_number,
 				 ui->board.side == SIDE_RED ? "Red" : "Blue");
 		} else {
-			snprintf(msg, sizeof(msg),
+			snprintf(ui->status_text, sizeof(ui->status_text),
 				 "Turn %d: No legal moves available - click Pass Turn",
 				 ui->board.turn_number);
 		}
-		gtk_widget_set_sensitive(ui->auto_setup_button, FALSE);
-		gtk_widget_set_sensitive(ui->pass_button, !can_move);
+		ui->auto_setup_btn.enabled = 0;
+		ui->pass_btn.enabled = !can_move;
 	} else {
-		snprintf(msg, sizeof(msg),
+		snprintf(ui->status_text, sizeof(ui->status_text),
 			 "Turn %d: Computer's turn (%s)...",
 			 ui->board.turn_number,
 			 ui->board.current_turn == SIDE_RED ? "Red" : "Blue");
-		gtk_widget_set_sensitive(ui->auto_setup_button, FALSE);
-		gtk_widget_set_sensitive(ui->pass_button, FALSE);
+		ui->auto_setup_btn.enabled = 0;
+		ui->pass_btn.enabled = 0;
 	}
 
-	gtk_label_set_text(GTK_LABEL(ui->status_label), msg);
-	if (ui->play_again_button != NULL) {
-		if (ui->board.phase == PHASE_GAME_OVER)
-			gtk_widget_show(ui->play_again_button);
-		else
-			gtk_widget_hide(ui->play_again_button);
-	}
-	if (ui->collision_label != NULL) {
-		if (ui->last_collision_text[0] != '\0') {
-			gchar *markup = g_markup_printf_escaped(
-				"<span foreground=\"#d94e1f\" weight=\"bold\">%s</span>",
-				ui->last_collision_text);
-			gtk_label_set_markup(GTK_LABEL(ui->collision_label),
-					     markup);
-			g_free(markup);
-		} else {
-			gtk_label_set_text(GTK_LABEL(ui->collision_label), "");
-		}
-	}
+	ui->play_again_btn.visible = (ui->board.phase == PHASE_GAME_OVER);
+	layout_ui(ui);
+	ui->dirty = 1;
 }
 
 static void cancel_poll_timer(struct gui *ui)
 {
-	if (ui->poll_timer_id != 0) {
-		g_source_remove(ui->poll_timer_id);
-		ui->poll_timer_id = 0;
+	ui->poll_scheduled = 0;
+}
+
+static void schedule_opponent_poll(struct gui *ui, Uint32 delay_ms)
+{
+	if (!ui->poll_scheduled && ui->opponent != NULL &&
+	    ui->board.phase != PHASE_GAME_OVER) {
+		ui->poll_scheduled = 1;
+		ui->poll_due_ms = SDL_GetTicks() + delay_ms;
 	}
-}
-
-static void schedule_opponent_poll(struct gui *ui, guint delay_ms)
-{
-	if (ui->poll_timer_id == 0 && ui->opponent != NULL &&
-	    ui->board.phase != PHASE_GAME_OVER)
-		ui->poll_timer_id = gdk_threads_add_timeout(
-			delay_ms, opponent_turn_timer_cb, ui);
-}
-
-static void set_mode_combo_silent(struct gui *ui, int active_idx)
-{
-	ui->suppress_combo_cb = 1;
-	gtk_combo_box_set_active(GTK_COMBO_BOX(ui->mode_combo_box), active_idx);
-	ui->suppress_combo_cb = 0;
 }
 
 static void reset_piece_arrays(struct gui *ui)
@@ -876,7 +807,7 @@ static void reset_managed_game(struct gui *ui)
 	dmost_board_set_event_cb(&ui->board, on_board_event, ui);
 	ui->mode = MODE_BOARD_SETUP;
 	ui->piece_box_open = 2.0;
-	set_mode_combo_silent(ui, 0);
+	ui->mode_dd.active_index = 0;
 	clear_log(ui);
 	clear_recent_collisions(ui);
 	if (ui->use_opponent)
@@ -885,8 +816,7 @@ static void reset_managed_game(struct gui *ui)
 		append_log(ui, "Manual offline mode.", 0);
 	sync_ui_from_board(ui);
 	update_status(ui);
-	if (ui->drawing_area != NULL)
-		gtk_widget_queue_draw(ui->drawing_area);
+	ui->dirty = 1;
 }
 
 static void pump_resolution_messages(struct gui *ui)
@@ -909,9 +839,8 @@ static void pump_resolution_messages(struct gui *ui)
 	}
 }
 
-static gboolean opponent_turn_timer_cb(gpointer data)
+static void process_opponent_poll(struct gui *ui)
 {
-	struct gui *ui = data;
 	struct dmost_msg msg, reply;
 	int has_reply = 0;
 	int rc;
@@ -919,18 +848,20 @@ static gboolean opponent_turn_timer_cb(gpointer data)
 	if (!ui->use_opponent || ui->opponent == NULL ||
 	    ui->board.phase == PHASE_GAME_OVER ||
 	    ui->board.phase == PHASE_SETUP) {
-		ui->poll_timer_id = 0;
-		return FALSE;
+		ui->poll_scheduled = 0;
+		return;
 	}
 
 	if (ui->board.phase == PHASE_PLAYING &&
 	    ui->board.current_turn == ui->board.side) {
-		ui->poll_timer_id = 0;
-		return FALSE;
+		ui->poll_scheduled = 0;
+		return;
 	}
 
-	if (ui->anim_count > 0)
-		return TRUE;
+	if (ui->anim_count > 0) {
+		ui->poll_due_ms = SDL_GetTicks() + 50;
+		return;
+	}
 
 	snapshot_board_for_anim(ui);
 	rc = dmost_opponent_poll(ui->opponent, &msg);
@@ -943,17 +874,16 @@ static gboolean opponent_turn_timer_cb(gpointer data)
 		finalize_enemy_move_anims(ui);
 		sync_ui_from_board(ui);
 		update_status(ui);
-		gtk_widget_queue_draw(ui->drawing_area);
+		ui->dirty = 1;
 	}
 
 	if (ui->board.phase == PHASE_GAME_OVER ||
 	    (ui->board.phase == PHASE_PLAYING &&
 	     ui->board.current_turn == ui->board.side)) {
-		ui->poll_timer_id = 0;
-		return FALSE;
+		ui->poll_scheduled = 0;
+	} else {
+		ui->poll_due_ms = SDL_GetTicks() + 300;
 	}
-
-	return TRUE;
 }
 
 static void start_managed_game(struct gui *ui)
@@ -967,9 +897,9 @@ static void start_managed_game(struct gui *ui)
 		append_log(ui, "Place all 18 pieces before starting (or click Auto Setup).", 0);
 		ui->mode = MODE_BOARD_SETUP;
 		ui->piece_box_open = 2.0;
-		set_mode_combo_silent(ui, 0);
+		ui->mode_dd.active_index = 0;
 		update_status(ui);
-		gtk_widget_queue_draw(ui->drawing_area);
+		ui->dirty = 1;
 		return;
 	}
 
@@ -977,7 +907,7 @@ static void start_managed_game(struct gui *ui)
 		sync_ui_from_board(ui);
 		ui->mode = MODE_PLAYING;
 		update_status(ui);
-		gtk_widget_queue_draw(ui->drawing_area);
+		ui->dirty = 1;
 		return;
 	}
 
@@ -987,7 +917,7 @@ static void start_managed_game(struct gui *ui)
 	if (ui->opponent == NULL) {
 		append_log(ui, "Failed to initialize computer opponent.", 0);
 		ui->mode = MODE_BOARD_SETUP;
-		set_mode_combo_silent(ui, 0);
+		ui->mode_dd.active_index = 0;
 		update_status(ui);
 		return;
 	}
@@ -1007,61 +937,40 @@ static void start_managed_game(struct gui *ui)
 	append_log(ui, "Game started! Red moves first.", 0);
 	sync_ui_from_board(ui);
 	update_status(ui);
-	gtk_widget_queue_draw(ui->drawing_area);
+	ui->dirty = 1;
 
 	if (ui->board.phase == PHASE_PLAYING &&
 	    ui->board.current_turn != ui->board.side)
 		schedule_opponent_poll(ui, 300);
 }
 
-static void invert_clicked(__attribute__((unused)) GtkWidget *widget,
-			   gpointer data)
+static void invert_clicked(struct gui *ui)
 {
-	struct gui *ui = data;
-
 	ui->inverted = !ui->inverted;
-	gtk_widget_queue_draw(ui->drawing_area);
+	ui->dirty = 1;
 }
 
-static void help_clicked(__attribute__((unused)) GtkWidget *widget,
-			 gpointer data)
+static void help_clicked(struct gui *ui)
 {
-	struct gui *ui = data;
-
-	gtk_widget_show_all(ui->help);
-	gtk_window_present(GTK_WINDOW(ui->help));
+	sdl_modal_open_help(&ui->help_modal, "DMOST Help", help_instructions);
+	sdl_modal_layout(&ui->help_modal, ui->win_w, ui->win_h);
+	ui->dirty = 1;
 }
 
-static gboolean close_help_clicked(GtkWidget *widget,
-				   __attribute__((unused)) GdkEvent *event,
-				   __attribute__((unused)) gpointer data)
+static void quit_clicked(struct gui *ui)
 {
-	gtk_widget_hide(widget);
-	return TRUE;
-}
-
-static void quit_clicked(__attribute__((unused)) GtkWidget *widget,
-			 gpointer data)
-{
-	struct gui *ui = data;
-
-	if (ui != NULL) {
-		cancel_poll_timer(ui);
-		clear_animations(ui);
-		dismiss_game_over_dialog(ui);
-		if (ui->opponent != NULL) {
-			dmost_opponent_destroy(ui->opponent);
-			ui->opponent = NULL;
-		}
+	cancel_poll_timer(ui);
+	clear_animations(ui);
+	dismiss_game_over_dialog(ui);
+	if (ui->opponent != NULL) {
+		dmost_opponent_destroy(ui->opponent);
+		ui->opponent = NULL;
 	}
-	gtk_main_quit();
+	ui->quit = 1;
 }
 
-static void auto_setup_clicked(__attribute__((unused)) GtkWidget *widget,
-			       gpointer data)
+static void auto_setup_clicked(struct gui *ui)
 {
-	struct gui *ui = data;
-
 	if (!ui->use_opponent || ui->board.phase != PHASE_SETUP ||
 	    ui->board.own_ready)
 		return;
@@ -1074,21 +983,11 @@ static void auto_setup_clicked(__attribute__((unused)) GtkWidget *widget,
 	sync_ui_from_board(ui);
 	update_status(ui);
 	append_log(ui, "Board automatically arranged. Click Play Game when ready.", 0);
-	gtk_widget_queue_draw(ui->drawing_area);
+	ui->dirty = 1;
 }
 
-static void new_game_clicked(__attribute__((unused)) GtkWidget *widget,
-			     gpointer data)
+static void pass_clicked(struct gui *ui)
 {
-	struct gui *ui = data;
-
-	reset_managed_game(ui);
-}
-
-static void pass_clicked(__attribute__((unused)) GtkWidget *widget,
-			 gpointer data)
-{
-	struct gui *ui = data;
 	struct dmost_msg msg;
 
 	if (!is_managed_mode(ui) || ui->opponent == NULL)
@@ -1104,81 +1003,11 @@ static void pass_clicked(__attribute__((unused)) GtkWidget *widget,
 	finalize_enemy_move_anims(ui);
 	sync_ui_from_board(ui);
 	update_status(ui);
-	gtk_widget_queue_draw(ui->drawing_area);
+	ui->dirty = 1;
 
 	if (ui->board.phase == PHASE_PLAYING &&
 	    ui->board.current_turn != ui->board.side)
 		schedule_opponent_poll(ui, 350);
-}
-
-static gint key_press_cb(__attribute__((unused)) GtkWidget *widget,
-			 GdkEventKey *event, gpointer data)
-{
-	struct gui *ui = data;
-
-	switch (event->keyval) {
-	case GDK_F11:
-		if (ui->fullscreen) {
-			ui->fullscreen = 0;
-			gtk_window_unfullscreen(GTK_WINDOW(ui->window));
-		} else {
-			ui->fullscreen = 1;
-			gtk_window_fullscreen(GTK_WINDOW(ui->window));
-		}
-		break;
-	case GDK_Escape:
-		if (ui->holding != NULL) {
-			ui->holding = NULL;
-			gtk_widget_queue_draw(ui->drawing_area);
-		}
-		break;
-	default:
-		break;
-	}
-	return TRUE;
-}
-
-static void draw_aligned_text(cairo_t *cr, double x, double y,
-			      double fontsize, const char *text, int alignment)
-{
-#define CENTERED 0
-#define LEFT_JUSTIFIED 1
-#define RIGHT_JUSTIFIED 2
-
-	double factor, direction;
-	cairo_text_extents_t extents;
-
-	switch (alignment) {
-	case CENTERED:
-		direction = -1.0;
-		factor = 0.5;
-		break;
-	case RIGHT_JUSTIFIED:
-		direction = -1.0;
-		factor = 1.0;
-		break;
-	case LEFT_JUSTIFIED:
-	default:
-		direction = 1.0;
-		factor = 1.0;
-		break;
-	}
-	cairo_select_font_face(cr, "SERIF", CAIRO_FONT_SLANT_NORMAL,
-			       CAIRO_FONT_WEIGHT_NORMAL);
-
-	cairo_set_font_size(cr, fontsize);
-	cairo_text_extents(cr, text, &extents);
-	x = x + direction * (factor * extents.width + extents.x_bearing);
-	y = y - (extents.height / 2 + extents.y_bearing);
-
-	cairo_move_to(cr, x, y);
-	cairo_show_text(cr, text);
-}
-
-static inline void draw_centered_text(cairo_t *cr, double x, double y,
-				      double fontsize, const char *text)
-{
-	draw_aligned_text(cr, x, y, fontsize, text, CENTERED);
 }
 
 static int invert(int y)
@@ -1220,11 +1049,11 @@ static void count_square_stack(const struct piece *target, struct piece *list,
 	}
 }
 
-static void draw_pieces_on_board(cairo_t *cr, struct piece *p)
+static void draw_pieces_on_board(struct gui *ui, struct piece *p)
 {
 	int i;
-	double cell_w = ui.xdim / (12.0 * ui.piece_box_open);
-	double cell_h = ui.ydim / 12.0;
+	double cell_w = ui->xdim / (12.0 * ui->piece_box_open);
+	double cell_h = ui->ydim / 12.0;
 
 	for (i = 0; p[i].name != NULL; i++) {
 		int stack_total = 0, stack_idx = 0;
@@ -1233,7 +1062,7 @@ static void draw_pieces_on_board(cairo_t *cr, struct piece *p)
 
 		if (p[i].x == UNKNOWN || !p[i].alive)
 			continue;
-		if (&p[i] == ui.holding || is_piece_queued_in_anim(&ui, &p[i]))
+		if (&p[i] == ui->holding || is_piece_queued_in_anim(ui, &p[i]))
 			continue;
 
 		if (p == p1) {
@@ -1254,92 +1083,91 @@ static void draw_pieces_on_board(cairo_t *cr, struct piece *p)
 
 		p[i].sx = p[i].x * cell_w + 1.5 * cell_w + ox;
 		p[i].sy = invert(p[i].y) * cell_h + 1.5 * cell_h + oy;
-		generic_draw_piece_on_board(&p[i], cr, scale);
+		generic_draw_piece_on_board(&p[i], ui, scale);
 	}
 }
 
-void generic_draw_piece_off_board(struct piece *p, cairo_t *cr, double radius)
+static void generic_draw_piece_off_board(struct piece *p, struct gui *ui,
+					 double radius)
 {
 	double alpha_fill = p->alive ? 0.25 : 0.08;
 	double alpha_stroke = p->alive ? 1.0 : 0.35;
+	float lw = (float)(MIN(ui->xdim, ui->ydim) / 200.0);
 
-	cairo_save(cr);
-	cairo_arc(cr, p->sx, p->sy, radius, 0.0, 2.0 * M_PI);
-	cairo_set_source_rgba(cr, p->r, p->g, p->b, alpha_fill);
-	cairo_fill_preserve(cr);
-	cairo_stroke(cr);
-	cairo_restore(cr);
+	sdl_gfx_fill_circle(ui->renderer, (float)p->sx, (float)p->sy,
+			    (float)radius,
+			    sdl_rgba_f(p->r, p->g, p->b, alpha_fill));
+	sdl_gfx_stroke_circle(ui->renderer, (float)p->sx, (float)p->sy,
+			      (float)(radius * 1.1), lw,
+			      sdl_rgba_f(p->r, p->g, p->b, alpha_stroke),
+			      0.0f, 0.0f);
 
-	cairo_save(cr);
-	cairo_set_line_width(cr, MIN(ui.xdim, ui.ydim) / 200.0);
-	cairo_set_source_rgba(cr, p->r, p->g, p->b, alpha_stroke);
-	cairo_arc(cr, p->sx, p->sy, radius * 1.1, 0.0, 2.0 * M_PI);
-	cairo_stroke(cr);
-	cairo_restore(cr);
-
-	cairo_save(cr);
-	cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, p->alive ? 1.0 : 0.45);
-	if (radius > 12.0 && radius < 23.0)
-		draw_centered_text(cr, p->sx, p->sy,
-				   MIN(ui.xdim, ui.ydim) / 32.0, p->name);
-	else if (radius >= 23.0)
-		draw_centered_text(cr, p->sx, p->sy,
-				   MIN(ui.xdim, ui.ydim) / 20.0, p->name);
-	if (!p->alive) {
-		double d = radius * 0.75;
-
-		cairo_set_source_rgba(cr, 0.9, 0.2, 0.2, 0.75);
-		cairo_set_line_width(cr, 2.0);
-		cairo_move_to(cr, p->sx - d, p->sy - d);
-		cairo_line_to(cr, p->sx + d, p->sy + d);
-		cairo_move_to(cr, p->sx + d, p->sy - d);
-		cairo_line_to(cr, p->sx - d, p->sy + d);
-		cairo_stroke(cr);
+	if (radius > 12.0 && radius < 23.0) {
+		sdl_font_draw(ui->renderer, &ui->font,
+			      (float)p->sx, (float)p->sy,
+			      (float)(MIN(ui->xdim, ui->ydim) / 32.0),
+			      p->name, SDL_ALIGN_CENTER,
+			      sdl_rgba_f(1.0, 1.0, 1.0, p->alive ? 1.0 : 0.45));
+	} else if (radius >= 23.0) {
+		sdl_font_draw(ui->renderer, &ui->font,
+			      (float)p->sx, (float)p->sy,
+			      (float)(MIN(ui->xdim, ui->ydim) / 20.0),
+			      p->name, SDL_ALIGN_CENTER,
+			      sdl_rgba_f(1.0, 1.0, 1.0, p->alive ? 1.0 : 0.45));
 	}
-	cairo_restore(cr);
+
+	if (!p->alive) {
+		float d = (float)(radius * 0.75);
+		SDL_Color xcol = sdl_rgba_f(0.9, 0.2, 0.2, 0.75);
+
+		sdl_gfx_thick_line(ui->renderer,
+				   (float)p->sx - d, (float)p->sy - d,
+				   (float)p->sx + d, (float)p->sy + d,
+				   2.0f, xcol, 0);
+		sdl_gfx_thick_line(ui->renderer,
+				   (float)p->sx + d, (float)p->sy - d,
+				   (float)p->sx - d, (float)p->sy + d,
+				   2.0f, xcol, 0);
+	}
 }
 
-static void draw_dead_piece_on_board(const struct piece *p, cairo_t *cr,
+static void draw_dead_piece_on_board(const struct piece *p, struct gui *ui,
 				     double cx, double cy, double radius_scale)
 {
 	double radius;
-	double d;
+	float d;
+	SDL_Color xcol;
 
-	if (ui.xdim / ui.piece_box_open < ui.ydim)
-		radius = (0.75 * ui.xdim / (12.0 * ui.piece_box_open)) / 2.0;
+	if (ui->xdim / ui->piece_box_open < ui->ydim)
+		radius = (0.75 * ui->xdim / (12.0 * ui->piece_box_open)) / 2.0;
 	else
-		radius = (0.75 * ui.ydim / 12.0) / 2.0;
+		radius = (0.75 * ui->ydim / 12.0) / 2.0;
 	radius *= radius_scale;
-	d = radius * 0.72;
+	d = (float)(radius * 0.72);
 
-	cairo_save(cr);
-	cairo_arc(cr, cx, cy, radius, 0.0, 2.0 * M_PI);
-	cairo_set_source_rgba(cr, p->r, p->g, p->b, 0.14);
-	cairo_fill_preserve(cr);
-	cairo_stroke(cr);
-	cairo_restore(cr);
+	sdl_gfx_fill_circle(ui->renderer, (float)cx, (float)cy, (float)radius,
+			    sdl_rgba_f(p->r, p->g, p->b, 0.14));
+	sdl_gfx_stroke_circle(ui->renderer, (float)cx, (float)cy,
+			      (float)(radius * 1.05),
+			      (float)(MIN(ui->xdim, ui->ydim) / 220.0),
+			      sdl_rgba_f(p->r, p->g, p->b, 0.55), 0.0f, 0.0f);
 
-	cairo_save(cr);
-	cairo_set_line_width(cr, MIN(ui.xdim, ui.ydim) / 220.0);
-	cairo_set_source_rgba(cr, p->r, p->g, p->b, 0.55);
-	cairo_arc(cr, cx, cy, radius * 1.05, 0.0, 2.0 * M_PI);
-	cairo_stroke(cr);
-	cairo_restore(cr);
+	if (radius > 8.0) {
+		double fh = MIN(ui->xdim, ui->ydim) / 32.0 * radius_scale;
+		if (fh < 8.0)
+			fh = 8.0;
+		sdl_font_draw(ui->renderer, &ui->font, (float)cx, (float)cy,
+			      (float)fh, p->name, SDL_ALIGN_CENTER,
+			      sdl_rgba_f(1.0, 1.0, 1.0, 0.80));
+	}
 
-	cairo_save(cr);
-	cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.80);
-	if (radius > 8.0)
-		draw_centered_text(cr, cx, cy,
-				   MIN(ui.xdim, ui.ydim) / 32.0 * radius_scale,
-				   p->name);
-	cairo_set_source_rgba(cr, 1.0, 0.35, 0.2, 0.85);
-	cairo_set_line_width(cr, 2.0);
-	cairo_move_to(cr, cx - d, cy - d);
-	cairo_line_to(cr, cx + d, cy + d);
-	cairo_move_to(cr, cx + d, cy - d);
-	cairo_line_to(cr, cx - d, cy + d);
-	cairo_stroke(cr);
-	cairo_restore(cr);
+	xcol = sdl_rgba_f(1.0, 0.35, 0.2, 0.85);
+	sdl_gfx_thick_line(ui->renderer,
+			   (float)cx - d, (float)cy - d,
+			   (float)cx + d, (float)cy + d, 2.0f, xcol, 0);
+	sdl_gfx_thick_line(ui->renderer,
+			   (float)cx + d, (float)cy - d,
+			   (float)cx - d, (float)cy + d, 2.0f, xcol, 0);
 }
 
 static int has_live_piece_at(int x, int y)
@@ -1379,18 +1207,18 @@ static void count_dead_square_stack(const struct piece *target,
 	}
 }
 
-static void draw_dead_pieces_on_board_list(cairo_t *cr, struct piece *p)
+static void draw_dead_pieces_on_board_list(struct gui *ui, struct piece *p)
 {
 	int i;
-	double cell_w = ui.xdim / (12.0 * ui.piece_box_open);
-	double cell_h = ui.ydim / 12.0;
+	double cell_w = ui->xdim / (12.0 * ui->piece_box_open);
+	double cell_h = ui->ydim / 12.0;
 
 	for (i = 0; p[i].name != NULL; i++) {
 		int dead_total = 0, dead_idx = 0, live_here;
 		double cx, cy, scale;
 
 		if (p[i].alive || p[i].x == UNKNOWN ||
-		    is_piece_queued_in_anim(&ui, &p[i]))
+		    is_piece_queued_in_anim(ui, &p[i]))
 			continue;
 
 		if (p == p1) {
@@ -1423,16 +1251,16 @@ static void draw_dead_pieces_on_board_list(cairo_t *cr, struct piece *p)
 			scale = 0.80;
 		}
 
-		draw_dead_piece_on_board(&p[i], cr, cx, cy, scale);
+		draw_dead_piece_on_board(&p[i], ui, cx, cy, scale);
 	}
 }
 
-static void draw_dead_pieces_on_board(cairo_t *cr)
+static void draw_dead_pieces_on_board(struct gui *ui)
 {
-	if (!is_managed_mode(&ui))
+	if (!is_managed_mode(ui))
 		return;
-	draw_dead_pieces_on_board_list(cr, p1);
-	draw_dead_pieces_on_board_list(cr, p2);
+	draw_dead_pieces_on_board_list(ui, p1);
+	draw_dead_pieces_on_board_list(ui, p2);
 }
 
 static int should_show_in_tray(const struct gui *ui, const struct piece *p)
@@ -1456,30 +1284,30 @@ static int should_show_in_tray(const struct gui *ui, const struct piece *p)
 	return is_own;
 }
 
-static void draw_pieces_off_board(cairo_t *cr, struct piece *p,
+static void draw_pieces_off_board(struct gui *ui, struct piece *p,
 				  int *initial_count)
 {
 	int i, count;
 	double leftx, xwidth, slotwidth;
 	double radius;
 
-	leftx = 11.0 * ui.xdim / (12.0 * ui.piece_box_open);
-	xwidth = ui.xdim - leftx;
-	slotwidth = MIN(xwidth / 6.0, ui.xdim / 12.0);
+	leftx = 11.0 * ui->xdim / (12.0 * ui->piece_box_open);
+	xwidth = ui->xdim - leftx;
+	slotwidth = MIN(xwidth / 6.0, ui->xdim / 12.0);
 	radius = slotwidth / 4.0;
 
 	count = *initial_count;
 	for (i = 0; p[i].name != NULL; i++) {
-		if (!should_show_in_tray(&ui, &p[i])) {
-			if (p[i].x == UNKNOWN && &p[i] != ui.holding) {
+		if (!should_show_in_tray(ui, &p[i])) {
+			if (p[i].x == UNKNOWN && &p[i] != ui->holding) {
 				p[i].sx = -1000;
 				p[i].sy = -1000;
 			}
 			continue;
 		}
 		p[i].sx = leftx + (count % 4) * slotwidth + slotwidth / 2.0;
-		p[i].sy = (ui.ydim / 12.0) + (count / 4) * slotwidth / 1.5;
-		generic_draw_piece_off_board(&p[i], cr, radius);
+		p[i].sy = (ui->ydim / 12.0) + (count / 4) * slotwidth / 1.5;
+		generic_draw_piece_off_board(&p[i], ui, radius);
 		count++;
 	}
 	*initial_count = count;
@@ -1555,34 +1383,27 @@ static int legal_move(struct gui *ui, struct piece *p, int x, int y)
 	return 0;
 }
 
-static void highlight_square(cairo_t *cr, struct gui *ui, int x, int y,
+static void highlight_square(struct gui *ui, int x, int y,
 			     double r, double g, double b, double a)
 {
 	double x1, y1, x2, y2;
+	SDL_Color col = sdl_rgba_f(r, g, b, a);
 
 	x1 = (x + 1) * ui->xdim / (12.0 * ui->piece_box_open);
 	x2 = (x + 2) * ui->xdim / (12.0 * ui->piece_box_open);
 	y1 = (invert(y) + 1) * (ui->ydim / 12.0);
 	y2 = (invert(y) + 2) * (ui->ydim / 12.0);
 
-	cairo_save(cr);
-	cairo_set_source_rgba(cr, r, g, b, a);
-	cairo_move_to(cr, x1, y1);
-	cairo_line_to(cr, x2, y1);
-	cairo_line_to(cr, x2, y2);
-	cairo_line_to(cr, x1, y2);
-	cairo_close_path(cr);
-	cairo_fill_preserve(cr);
-	cairo_stroke(cr);
-	cairo_restore(cr);
+	sdl_gfx_fill_rect(ui->renderer, (float)x1, (float)y1,
+			  (float)(x2 - x1), (float)(y2 - y1), col);
 }
 
-static void highlight_legal_square(cairo_t *cr, struct gui *ui, int x, int y)
+static void highlight_legal_square(struct gui *ui, int x, int y)
 {
-	highlight_square(cr, ui, x, y, 0.0, 1.0, 0.0, 0.14);
+	highlight_square(ui, x, y, 0.0, 1.0, 0.0, 0.14);
 }
 
-static void highlight_legal_moves(cairo_t *cr, struct gui *ui)
+static void highlight_legal_moves(struct gui *ui)
 {
 	int x, y;
 
@@ -1595,10 +1416,10 @@ static void highlight_legal_moves(cairo_t *cr, struct gui *ui)
 	for (x = 0; x < 10; x++)
 		for (y = 0; y < 10; y++)
 			if (legal_move(ui, ui->holding, x, y))
-				highlight_legal_square(cr, ui, x, y);
+				highlight_legal_square(ui, x, y);
 }
 
-static void highlight_visited_squares(cairo_t *cr, struct gui *ui)
+static void highlight_visited_squares(struct gui *ui)
 {
 	int x, y;
 	double r = 0.0, b = 0.0;
@@ -1610,13 +1431,12 @@ static void highlight_visited_squares(cairo_t *cr, struct gui *ui)
 	if (ui->playing_as == PLAYING_AS_BLUE)
 		b = 1.0;
 
-	cairo_save(cr);
 	if (is_managed_mode(ui)) {
 		for (x = 0; x < BOARD_SIZE; x++) {
 			for (y = 0; y < BOARD_SIZE; y++) {
 				if (dmost_side_owns_row(enemy_side, y) &&
 				    ui->board.enemy_clear[x][y])
-					highlight_square(cr, ui, x, y,
+					highlight_square(ui, x, y,
 							 0.1, 0.85, 0.55, 0.14);
 			}
 		}
@@ -1624,11 +1444,10 @@ static void highlight_visited_squares(cairo_t *cr, struct gui *ui)
 	for (x = 0; x < 10; x++)
 		for (y = 0; y < 10; y++)
 			if (ui->visited[x][y])
-				highlight_square(cr, ui, x, y, r, 0.0, b, 0.2);
-	cairo_restore(cr);
+				highlight_square(ui, x, y, r, 0.0, b, 0.2);
 }
 
-static void highlight_recent_collisions(cairo_t *cr, struct gui *ui)
+static void highlight_recent_collisions(struct gui *ui)
 {
 	int i;
 	double cell_w = ui->xdim / (12.0 * ui->piece_box_open);
@@ -1643,18 +1462,16 @@ static void highlight_recent_collisions(cairo_t *cr, struct gui *ui)
 		double x1 = (x + 1) * cell_w;
 		double y1 = (invert(y) + 1) * cell_h;
 
-		highlight_square(cr, ui, x, y, 1.0, 0.55, 0.0, 0.26);
-		cairo_save(cr);
-		cairo_set_source_rgba(cr, 1.0, 0.72, 0.15, 0.92);
-		cairo_set_line_width(cr, 2.5);
-		cairo_rectangle(cr, x1 + 1.5, y1 + 1.5,
-				cell_w - 3.0, cell_h - 3.0);
-		cairo_stroke(cr);
-		cairo_restore(cr);
+		highlight_square(ui, x, y, 1.0, 0.55, 0.0, 0.26);
+		sdl_gfx_stroke_rect(ui->renderer,
+				    (float)(x1 + 1.5), (float)(y1 + 1.5),
+				    (float)(cell_w - 3.0),
+				    (float)(cell_h - 3.0),
+				    2.5f, sdl_rgba_f(1.0, 0.72, 0.15, 0.92));
 	}
 }
 
-static void draw_active_animation(cairo_t *cr, struct gui *ui)
+static void draw_active_animation(struct gui *ui)
 {
 	const struct anim_step *step;
 	double cell_w = ui->xdim / (12.0 * ui->piece_box_open);
@@ -1680,6 +1497,7 @@ static void draw_active_animation(cairo_t *cr, struct gui *ui)
 		double pos = ease * total_segs;
 		int seg = (int)pos;
 		double frac, x0, y0, x1, y1, ix, iy;
+		SDL_FPoint pts[MAX_PATH_LEN + 1];
 		int k;
 
 		if (seg >= step->path_len - 1)
@@ -1694,99 +1512,83 @@ static void draw_active_animation(cairo_t *cr, struct gui *ui)
 		iy = y0 + (y1 - y0) * frac;
 
 		/* Animated glowing trail along path */
-		cairo_save(cr);
-		cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
-		cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
-		cairo_set_line_width(cr, MIN(cell_w, cell_h) * 0.14);
-		cairo_set_source_rgba(cr, step->r, step->g, step->b, 0.72);
-		cairo_move_to(cr, (step->path[0].x + 1.5) * cell_w,
-			      (invert(step->path[0].y) + 1.5) * cell_h);
-		for (k = 1; k <= seg; k++) {
-			cairo_line_to(cr, (step->path[k].x + 1.5) * cell_w,
-				      (invert(step->path[k].y) + 1.5) * cell_h);
+		for (k = 0; k <= seg; k++) {
+			pts[k].x = (float)((step->path[k].x + 1.5) * cell_w);
+			pts[k].y = (float)((invert(step->path[k].y) + 1.5) * cell_h);
 		}
-		cairo_line_to(cr, ix, iy);
-		cairo_stroke(cr);
-		cairo_restore(cr);
+		pts[seg + 1].x = (float)ix;
+		pts[seg + 1].y = (float)iy;
+		sdl_gfx_polyline(ui->renderer, pts, seg + 2,
+				 (float)(MIN(cell_w, cell_h) * 0.14),
+				 sdl_rgba_f(step->r, step->g, step->b, 0.72));
 
 		/* Bright moving halo */
-		cairo_save(cr);
-		cairo_set_line_width(cr, 2.5);
-		cairo_set_source_rgba(cr, 1.0, 1.0, 0.7, 0.6);
-		cairo_arc(cr, ix, iy, radius * 1.32, 0.0, 2.0 * M_PI);
-		cairo_stroke(cr);
-		cairo_restore(cr);
+		sdl_gfx_stroke_circle(ui->renderer, (float)ix, (float)iy,
+				      (float)(radius * 1.32), 2.5f,
+				      sdl_rgba_f(1.0, 1.0, 0.7, 0.6),
+				      0.0f, 0.0f);
 
 		/* Piece disk & label */
-		cairo_save(cr);
-		cairo_arc(cr, ix, iy, radius, 0.0, 2.0 * M_PI);
-		cairo_set_source_rgba(cr, step->r, step->g, step->b, 0.40);
-		cairo_fill_preserve(cr);
-		cairo_stroke(cr);
-		cairo_restore(cr);
+		sdl_gfx_fill_circle(ui->renderer, (float)ix, (float)iy,
+				    (float)radius,
+				    sdl_rgba_f(step->r, step->g, step->b, 0.40));
+		sdl_gfx_stroke_circle(ui->renderer, (float)ix, (float)iy,
+				      (float)(radius * 1.1),
+				      (float)(MIN(ui->xdim, ui->ydim) / 180.0),
+				      sdl_rgba_f(step->r, step->g, step->b, 1.0),
+				      0.0f, 0.0f);
 
-		cairo_save(cr);
-		cairo_set_line_width(cr, MIN(ui->xdim, ui->ydim) / 180.0);
-		cairo_set_source_rgba(cr, step->r, step->g, step->b, 1.0);
-		cairo_arc(cr, ix, iy, radius * 1.1, 0.0, 2.0 * M_PI);
-		cairo_stroke(cr);
-		cairo_restore(cr);
-
-		cairo_save(cr);
-		cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 1.0);
-		if (radius > 12.0)
-			draw_centered_text(cr, ix, iy,
-					   MIN(ui->xdim, ui->ydim) / 32.0,
-					   step->piece->name);
-		cairo_restore(cr);
+		if (radius > 12.0) {
+			sdl_font_draw(ui->renderer, &ui->font,
+				      (float)ix, (float)iy,
+				      (float)(MIN(ui->xdim, ui->ydim) / 32.0),
+				      step->piece->name, SDL_ALIGN_CENTER,
+				      sdl_rgba_f(1.0, 1.0, 1.0, 1.0));
+		}
 	} else if (step->kind == ANIM_APPEAR) {
 		double cx = (step->x + 1.5) * cell_w;
 		double cy = (invert(step->y) + 1.5) * cell_h;
 		double alpha = 0.92 * (1.0 - t);
 
-		cairo_save(cr);
-		cairo_set_line_width(cr, 3.0);
-		cairo_set_source_rgba(cr, step->r, step->g, step->b, alpha);
-		cairo_arc(cr, cx, cy, radius * (1.05 + 1.35 * ease),
-			  0.0, 2.0 * M_PI);
-		cairo_stroke(cr);
-		cairo_set_line_width(cr, 2.0);
-		cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, alpha * 0.85);
-		cairo_arc(cr, cx, cy, radius * (0.95 + 0.70 * ease),
-			  0.0, 2.0 * M_PI);
-		cairo_stroke(cr);
-		cairo_restore(cr);
+		sdl_gfx_stroke_circle(ui->renderer, (float)cx, (float)cy,
+				      (float)(radius * (1.05 + 1.35 * ease)),
+				      3.0f,
+				      sdl_rgba_f(step->r, step->g, step->b, alpha),
+				      0.0f, 0.0f);
+		sdl_gfx_stroke_circle(ui->renderer, (float)cx, (float)cy,
+				      (float)(radius * (0.95 + 0.70 * ease)),
+				      2.0f,
+				      sdl_rgba_f(1.0, 1.0, 1.0, alpha * 0.85),
+				      0.0f, 0.0f);
 	} else if (step->kind == ANIM_IMPACT) {
 		double cx = (step->x + 1.5) * cell_w;
 		double cy = (invert(step->y) + 1.5) * cell_h;
 		double alpha = 0.95 * (1.0 - t);
 		double inner_r = radius * 0.35;
 		double outer_r = radius * (0.85 + 1.25 * ease);
+		SDL_Color ray_col = sdl_rgba_f(1.0, 0.92, 0.55, alpha);
 		int k;
 
-		cairo_save(cr);
-		cairo_set_line_width(cr, 3.5);
-		cairo_set_source_rgba(cr, 1.0, 0.72, 0.15, alpha);
-		cairo_arc(cr, cx, cy, radius * (0.55 + 1.75 * ease),
-			  0.0, 2.0 * M_PI);
-		cairo_stroke(cr);
+		sdl_gfx_stroke_circle(ui->renderer, (float)cx, (float)cy,
+				      (float)(radius * (0.55 + 1.75 * ease)),
+				      3.5f,
+				      sdl_rgba_f(1.0, 0.72, 0.15, alpha),
+				      0.0f, 0.0f);
 
-		cairo_set_line_width(cr, 2.2);
-		cairo_set_source_rgba(cr, 1.0, 0.92, 0.55, alpha);
 		for (k = 0; k < 8; k++) {
 			double ang = 2.0 * M_PI * (double)k / 8.0;
 
-			cairo_move_to(cr, cx + cos(ang) * inner_r,
-				      cy + sin(ang) * inner_r);
-			cairo_line_to(cr, cx + cos(ang) * outer_r,
-				      cy + sin(ang) * outer_r);
+			sdl_gfx_thick_line(ui->renderer,
+					   (float)(cx + cos(ang) * inner_r),
+					   (float)(cy + sin(ang) * inner_r),
+					   (float)(cx + cos(ang) * outer_r),
+					   (float)(cy + sin(ang) * outer_r),
+					   2.2f, ray_col, 0);
 		}
-		cairo_stroke(cr);
-		cairo_restore(cr);
 	}
 }
 
-static void draw_game_over_banner(cairo_t *cr, struct gui *ui)
+static void draw_game_over_banner(struct gui *ui)
 {
 	double cell_h = ui->ydim / 12.0;
 	double board_w = 10.0 * ui->xdim / (12.0 * ui->piece_box_open);
@@ -1802,7 +1604,7 @@ static void draw_game_over_banner(cairo_t *cr, struct gui *ui)
 	int human_won;
 
 	if (!is_managed_mode(ui) || ui->board.phase != PHASE_GAME_OVER ||
-	    ui->anim_count > 0 || ui->game_over_dialog != NULL)
+	    ui->anim_count > 0 || ui->game_over_modal.active)
 		return;
 
 	human_won = ((ui->board.side == SIDE_RED &&
@@ -1814,7 +1616,7 @@ static void draw_game_over_banner(cairo_t *cr, struct gui *ui)
 		br = 0.55;
 		bg = 0.75;
 		bb = 0.95;
-		headline = "GAME OVER — DRAW";
+		headline = "GAME OVER \xE2\x80\x94 DRAW";
 		subline = "Neither player can reach the other's Home Planet";
 	} else if (human_won) {
 		br = 0.25;
@@ -1828,93 +1630,86 @@ static void draw_game_over_banner(cairo_t *cr, struct gui *ui)
 		bg = 0.30;
 		bb = 0.25;
 		headline = (ui->board.result == RESULT_RED_WINS) ?
-			   "DEFEAT — RED WINS" : "DEFEAT — BLUE WINS";
+			   "DEFEAT \xE2\x80\x94 RED WINS" :
+			   "DEFEAT \xE2\x80\x94 BLUE WINS";
 		subline = "Your Home Planet was destroyed";
 	}
 
 	snprintf(full_text, sizeof(full_text), "%s  (%s)", headline, subline);
 
-	cairo_save(cr);
-	cairo_set_source_rgba(cr, 0.05, 0.05, 0.10, 0.88);
-	cairo_rectangle(cr, left_x, top_y, board_w, bh);
-	cairo_fill_preserve(cr);
-	cairo_set_line_width(cr, 2.5);
-	cairo_set_source_rgba(cr, br, bg, bb, 0.95);
-	cairo_stroke(cr);
+	sdl_gfx_fill_rect(ui->renderer, (float)left_x, (float)top_y,
+			  (float)board_w, (float)bh,
+			  sdl_rgba_f(0.05, 0.05, 0.10, 0.88));
+	sdl_gfx_stroke_rect(ui->renderer, (float)left_x, (float)top_y,
+			    (float)board_w, (float)bh, 2.5f,
+			    sdl_rgba_f(br, bg, bb, 0.95));
 
-	cairo_set_source_rgba(cr, br, bg, bb, 1.0);
-	draw_centered_text(cr, cx, cy, MIN(board_w / 28.0, bh * 0.46),
-			   full_text);
-	cairo_restore(cr);
+	{
+		double fs = MIN(board_w / 28.0, bh * 0.46);
+		if (fs < 10.0)
+			fs = 10.0;
+		sdl_font_draw(ui->renderer, &ui->font, (float)cx, (float)cy,
+			      (float)fs, full_text, SDL_ALIGN_CENTER,
+			      sdl_rgba_f(br, bg, bb, 1.0));
+	}
 }
 
-static gboolean on_expose_drawing_area(GtkWidget *w,
-				       __attribute__((unused)) GdkEventExpose *event,
-				       gpointer p)
+static void render_board(struct gui *ui)
 {
-	struct gui *ui = p;
-	cairo_t *cr;
-	static cairo_surface_t *galaxy_image = NULL;
-	static int xd = 0, yd = 0;
-	static double dash[] = { 1.0, 2.0 };
+	SDL_Rect vp;
+	SDL_Color grid_col, label_col;
 	int i, off_board_piece_count = 0;
+
+	if (ui->xdim <= 0 || ui->ydim <= 0)
+		return;
 
 	if (ui->holding != NULL) {
 		ui->holding->sx = ui->mousex;
 		ui->holding->sy = ui->mousey;
 	}
-	if (galaxy_image == NULL) {
-		galaxy_image = cairo_image_surface_create_from_png("pinwheel.png");
-		if (cairo_surface_status(galaxy_image) != CAIRO_STATUS_SUCCESS) {
-			cairo_surface_destroy(galaxy_image);
-			galaxy_image = cairo_image_surface_create_from_png("src/pinwheel.png");
-		}
-		if (cairo_surface_status(galaxy_image) == CAIRO_STATUS_SUCCESS) {
-			xd = cairo_image_surface_get_width(galaxy_image);
-			yd = cairo_image_surface_get_height(galaxy_image);
-		}
+
+	vp.x = (int)ui->board_rect.x;
+	vp.y = (int)ui->board_rect.y;
+	vp.w = ui->xdim;
+	vp.h = ui->ydim;
+	SDL_RenderSetViewport(ui->renderer, &vp);
+
+	sdl_gfx_fill_rect(ui->renderer, 0.0f, 0.0f,
+			  (float)ui->xdim, (float)ui->ydim,
+			  sdl_rgba_f(0.0, 0.0, 0.0, 1.0));
+
+	if (ui->galaxy_tex != NULL && ui->galaxy_w > 0 && ui->galaxy_h > 0) {
+		SDL_FRect dst;
+
+		dst.x = 0.0f;
+		dst.y = 0.0f;
+		dst.w = (float)((double)ui->xdim / ui->piece_box_open);
+		dst.h = (float)ui->ydim;
+		SDL_SetTextureAlphaMod(ui->galaxy_tex, 128);
+		SDL_RenderCopyExF(ui->renderer, ui->galaxy_tex, NULL, &dst,
+				  0.0, NULL,
+				  ui->inverted ? SDL_FLIP_VERTICAL : SDL_FLIP_NONE);
 	}
 
-	cr = gdk_cairo_create(w->window);
-
-	if (galaxy_image != NULL &&
-	    cairo_surface_status(galaxy_image) == CAIRO_STATUS_SUCCESS &&
-	    xd > 0 && yd > 0) {
-		cairo_save(cr);
-		if (ui->inverted) {
-			cairo_scale(cr, 1.0, -1.0);
-			cairo_translate(cr, 0.0, -ui->ydim);
-		}
-		cairo_scale(cr,
-			    (double)ui->xdim / (double)xd / ui->piece_box_open,
-			    (double)ui->ydim / (double)yd);
-		cairo_set_source_surface(cr, galaxy_image, 0, 0);
-		cairo_paint_with_alpha(cr, 0.5);
-		cairo_restore(cr);
-	}
-
-	cairo_save(cr);
-	cairo_set_dash(cr, dash, 2, 2.0);
-	cairo_set_source_rgb(cr, 0.5, 1, 0.5);
+	grid_col = sdl_rgba_f(0.5, 1.0, 0.5, 1.0);
 	for (i = 1; i <= 11; i++) {
-		cairo_move_to(cr, ui->xdim / (12.0 * ui->piece_box_open) * i,
-			      ui->ydim / 12.0);
-		cairo_line_to(cr, ui->xdim / (12.0 * ui->piece_box_open) * i,
-			      11.0 * ui->ydim / 12.0);
-		cairo_move_to(cr, ui->xdim / (12.0 * ui->piece_box_open),
-			      i * ui->ydim / 12.0);
-		cairo_line_to(cr, 11.0 * ui->xdim / (12.0 * ui->piece_box_open),
-			      i * ui->ydim / 12.0);
+		float gx = (float)(ui->xdim / (12.0 * ui->piece_box_open) * i);
+		float gy0 = (float)(ui->ydim / 12.0);
+		float gy1 = (float)(11.0 * ui->ydim / 12.0);
+		float gy = (float)(i * ui->ydim / 12.0);
+		float gx0 = (float)(ui->xdim / (12.0 * ui->piece_box_open));
+		float gx1 = (float)(11.0 * ui->xdim / (12.0 * ui->piece_box_open));
+
+		sdl_gfx_dashed_line(ui->renderer, gx, gy0, gx, gy1,
+				    1.5f, 2.0f, 3.0f, grid_col);
+		sdl_gfx_dashed_line(ui->renderer, gx0, gy, gx1, gy,
+				    1.5f, 2.0f, 3.0f, grid_col);
 	}
 
-	switch (ui->playing_as) {
-	case PLAYING_AS_RED:
-		cairo_set_source_rgb(cr, 1.0, 0.25, 0.25);
-		break;
-	case PLAYING_AS_BLUE:
-		cairo_set_source_rgb(cr, 0.3, 0.5, 1.0);
-		break;
-	}
+	if (ui->playing_as == PLAYING_AS_RED)
+		label_col = sdl_rgba_f(1.0, 0.25, 0.25, 1.0);
+	else
+		label_col = sdl_rgba_f(0.3, 0.5, 1.0, 1.0);
 
 	for (i = 0; i < 10; i++) {
 		char letter[4];
@@ -1924,91 +1719,149 @@ static gboolean on_expose_drawing_area(GtkWidget *w,
 		y = (i + 1.5) * ui->ydim / 12.0;
 		if (ui->inverted)
 			y = ui->ydim - y;
-		draw_centered_text(cr, ui->xdim / (24.0 * ui->piece_box_open),
-				   y, ui->ydim / 30.0, letter);
+		sdl_font_draw(ui->renderer, &ui->font,
+			      (float)(ui->xdim / (24.0 * ui->piece_box_open)),
+			      (float)y, (float)(ui->ydim / 30.0),
+			      letter, SDL_ALIGN_CENTER, label_col);
 	}
 	for (i = 0; i < 10; i++) {
 		char number[4];
 
 		snprintf(number, sizeof(number), "%d", i + 1);
-		draw_centered_text(cr,
-				   (i + 1.5) * ui->xdim /
-				   (12.0 * ui->piece_box_open),
-				   ui->ydim / 24.0,
-				   (ui->xdim / ui->piece_box_open) / 30.0,
-				   number);
+		sdl_font_draw(ui->renderer, &ui->font,
+			      (float)((i + 1.5) * ui->xdim /
+				      (12.0 * ui->piece_box_open)),
+			      (float)(ui->ydim / 24.0),
+			      (float)((ui->xdim / ui->piece_box_open) / 30.0),
+			      number, SDL_ALIGN_CENTER, label_col);
 	}
-	cairo_stroke(cr);
-	cairo_restore(cr);
 
-	highlight_visited_squares(cr, ui);
-	highlight_recent_collisions(cr, ui);
-	highlight_legal_moves(cr, ui);
+	highlight_visited_squares(ui);
+	highlight_recent_collisions(ui);
+	highlight_legal_moves(ui);
 
-	draw_dead_pieces_on_board(cr);
-	draw_pieces_on_board(cr, p1);
-	draw_pieces_on_board(cr, p2);
-	draw_active_animation(cr, ui);
-	draw_game_over_banner(cr, ui);
-	draw_pieces_off_board(cr, p1, &off_board_piece_count);
-	draw_pieces_off_board(cr, p2, &off_board_piece_count);
+	draw_dead_pieces_on_board(ui);
+	draw_pieces_on_board(ui, p1);
+	draw_pieces_on_board(ui, p2);
+	draw_active_animation(ui);
+	draw_game_over_banner(ui);
+	draw_pieces_off_board(ui, p1, &off_board_piece_count);
+	draw_pieces_off_board(ui, p2, &off_board_piece_count);
 	if (ui->holding != NULL)
-		generic_draw_piece_off_board(ui->holding, cr, ui->xdim / 24.0);
+		generic_draw_piece_off_board(ui->holding, ui, ui->xdim / 24.0);
 
-	cairo_destroy(cr);
-	return TRUE;
+	SDL_RenderSetViewport(ui->renderer, NULL);
 }
 
-static gint on_config_drawing_area(GtkWidget *w,
-				   __attribute__((unused)) GdkEventConfigure *event,
-				   gpointer p)
+static void generic_draw_piece_on_board(struct piece *p, struct gui *ui,
+					double radius_scale)
 {
-	struct gui *ui = p;
+	double radius;
+	double x1, y1, x2, y2;
+	int show_trail;
 
-	ui->xdim = w->allocation.width;
-	ui->ydim = w->allocation.height;
-	return FALSE;
+	if (ui->xdim / ui->piece_box_open < ui->ydim)
+		radius = (0.75 * ui->xdim / (12.0 * ui->piece_box_open)) / 2.0;
+	else
+		radius = (0.75 * ui->ydim / 12.0) / 2.0;
+	radius *= radius_scale;
+
+	show_trail = (p->prevx != -1) &&
+		(is_managed_mode(ui) ||
+		 (ui->playing_as == PLAYING_AS_RED && p->r > 0.9) ||
+		 (ui->playing_as == PLAYING_AS_BLUE && p->b > 0.9));
+
+	/* draw trail */
+	if (show_trail) {
+		float line_w = (float)(MIN(ui->xdim / ui->piece_box_open,
+					   ui->ydim) / 64.0);
+		SDL_Color trail_col = sdl_rgba_f(p->r, p->g, p->b, 0.35);
+
+		x1 = (p->x + 1.5) * ui->xdim / (12.0 * ui->piece_box_open);
+		y1 = (invert(p->y) + 1.5) * (ui->ydim / 12.0);
+		x2 = (p->prevx + 1.5) * ui->xdim / (12.0 * ui->piece_box_open);
+		y2 = (invert(p->prevy) + 1.5) * (ui->ydim / 12.0);
+		if (p->strength == WFIGHTER) {
+			double tx, ty;
+			double factor = ui->inverted ? -1.0 : 1.0;
+			SDL_FPoint pts[3];
+
+			if (abs(p->x - p->prevx) < abs(p->y - p->prevy)) {
+				if (p->prevx < p->x)
+					tx = x1 - ui->xdim / (12.0 * ui->piece_box_open);
+				else
+					tx = x1 + ui->xdim / (12.0 * ui->piece_box_open);
+				ty = y1;
+			} else {
+				if (p->prevy < p->y)
+					ty = y1 - factor * ui->ydim / 12.0;
+				else
+					ty = y1 + factor * ui->ydim / 12.0;
+				tx = x1;
+			}
+			pts[0].x = (float)x1;
+			pts[0].y = (float)y1;
+			pts[1].x = (float)tx;
+			pts[1].y = (float)ty;
+			pts[2].x = (float)x2;
+			pts[2].y = (float)y2;
+			sdl_gfx_polyline(ui->renderer, pts, 3,
+					 line_w, trail_col);
+		} else {
+			sdl_gfx_thick_line(ui->renderer,
+					   (float)x1, (float)y1,
+					   (float)x2, (float)y2,
+					   line_w, trail_col, 1);
+		}
+	}
+
+	sdl_gfx_fill_circle(ui->renderer, (float)p->sx, (float)p->sy,
+			    (float)radius,
+			    sdl_rgba_f(p->r, p->g, p->b, 0.25));
+
+	{
+		float lw = (float)(MIN(ui->xdim, ui->ydim) / 200.0);
+		float dash = p->in_transit ? 4.0f : 0.0f;
+		float gap = p->in_transit ? 3.0f : 0.0f;
+
+		sdl_gfx_stroke_circle(ui->renderer, (float)p->sx, (float)p->sy,
+				      (float)(radius * 1.1), lw,
+				      sdl_rgba_f(p->r, p->g, p->b, 1.0),
+				      dash, gap);
+	}
+
+	if (radius > 12.0) {
+		double fh = MIN(ui->xdim, ui->ydim) / 32.0 * radius_scale;
+		if (fh < 8.0)
+			fh = 8.0;
+		sdl_font_draw(ui->renderer, &ui->font,
+			      (float)p->sx, (float)p->sy, (float)fh,
+			      p->name, SDL_ALIGN_CENTER,
+			      sdl_rgba_f(1.0, 1.0, 1.0, 1.0));
+	}
 }
 
-static void hide_or_show_piecebox(struct gui *ui, GtkWidget *w)
+static void hide_or_show_piecebox(struct gui *ui)
 {
 	if (ui->mode == MODE_BOARD_SETUP) {
 		if (ui->piece_box_open != 2.0) {
 			ui->piece_box_open = 2.0;
-			gtk_widget_queue_draw(w);
+			ui->dirty = 1;
 		}
 		return;
 	}
 	if (ui->piece_box_open > 1.0 && ui->mousex < ui->xdim / 2.2) {
-		gtk_widget_queue_draw(w);
 		ui->piece_box_open *= 0.8;
 		if (ui->piece_box_open < 1.0)
 			ui->piece_box_open = 1.0;
+		ui->dirty = 1;
 	} else if (ui->mousex > 11.0 * (ui->xdim / (12.0 * ui->piece_box_open)) &&
 		   ui->piece_box_open < 2.0) {
 		ui->piece_box_open *= 1.2;
-		gtk_widget_queue_draw(w);
 		if (ui->piece_box_open > 2.0)
 			ui->piece_box_open = 2.0;
+		ui->dirty = 1;
 	}
-}
-
-static gboolean on_mouse_motion(GtkWidget *w, GdkEvent *event, gpointer p)
-{
-	struct gui *ui = p;
-	GdkEventMotion *e = (GdkEventMotion *)event;
-
-	if (!e)
-		return TRUE;
-
-	ui->mousex = (int)e->x;
-	ui->mousey = (int)e->y;
-
-	hide_or_show_piecebox(ui, w);
-	if (ui->holding != NULL)
-		gtk_widget_queue_draw(w);
-
-	return TRUE;
 }
 
 static struct piece *find_closest_piece(const struct gui *ui, struct piece *p,
@@ -2065,15 +1918,15 @@ static int screen_to_board(const struct gui *ui, double mx, double my,
 	return 1;
 }
 
-static gboolean on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
+static void handle_board_button_down(struct gui *ui, Uint8 button,
+				     int bx, int by)
 {
-	struct gui *ui = ptr;
 	int tmpx, tmpy;
 
-	if (event->type == GDK_BUTTON_PRESS && event->button.button == 1) {
-		ui->mousex = (int)event->button.x;
-		ui->mousey = (int)event->button.y;
+	ui->mousex = bx;
+	ui->mousey = by;
 
+	if (button == SDL_BUTTON_LEFT) {
 		if (ui->holding != NULL) {
 			/* Dropping a piece */
 			if (ui->mousex >
@@ -2086,8 +1939,8 @@ static gboolean on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 						update_status(ui);
 					}
 					ui->holding = NULL;
-					gtk_widget_queue_draw(w);
-					return TRUE;
+					ui->dirty = 1;
+					return;
 				}
 				/* Off the board in manual/free mode */
 				ui->holding->x = UNKNOWN;
@@ -2096,14 +1949,14 @@ static gboolean on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 				ui->holding->pickedx = -1;
 				ui->holding->pickedy = -1;
 				ui->holding = NULL;
-				gtk_widget_queue_draw(w);
-				return TRUE;
+				ui->dirty = 1;
+				return;
 			}
 
 			if (screen_to_board(ui, ui->mousex, ui->mousey,
 					    &tmpx, &tmpy)) {
 				if (!legal_move(ui, ui->holding, tmpx, tmpy))
-					return TRUE;
+					return;
 
 				if (is_managed_mode(ui)) {
 					if (ui->mode == MODE_BOARD_SETUP) {
@@ -2130,18 +1983,18 @@ static gboolean on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 								finalize_enemy_move_anims(ui);
 								sync_ui_from_board(ui);
 								update_status(ui);
-								gtk_widget_queue_draw(w);
+								ui->dirty = 1;
 								if (ui->board.phase == PHASE_RESOLVING ||
 								    (ui->board.phase == PHASE_PLAYING &&
 								     ui->board.current_turn != ui->board.side))
 									schedule_opponent_poll(ui, 350);
-								return TRUE;
+								return;
 							}
 						}
 					}
 					ui->holding = NULL;
-					gtk_widget_queue_draw(w);
-					return TRUE;
+					ui->dirty = 1;
+					return;
 				}
 
 				/* Manual / Free-form drop */
@@ -2156,16 +2009,16 @@ static gboolean on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 					ui->holding->prevx = -1;
 				}
 				ui->holding = NULL;
-				gtk_widget_queue_draw(w);
+				ui->dirty = 1;
 			}
-			return TRUE;
+			return;
 		}
 
 		/* Picking up a piece */
 		if (is_managed_mode(ui) && ui->mode == MODE_PLAYING) {
 			if (ui->board.phase != PHASE_PLAYING ||
 			    ui->board.current_turn != ui->board.side)
-				return TRUE;
+				return;
 			clear_animations(ui);
 		}
 
@@ -2187,78 +2040,61 @@ static gboolean on_button_clicked(GtkWidget *w, GdkEvent *event, gpointer ptr)
 			if (found != NULL) {
 				if (board_only &&
 				    !dmost_piece_is_mobile(found->strength))
-					return TRUE;
+					return;
 				ui->holding = found;
-				gtk_widget_queue_draw(ui->drawing_area);
+				ui->dirty = 1;
 			}
 		}
-		return TRUE;
+		return;
 	}
 
-	if (event->type == GDK_BUTTON_PRESS && event->button.button == 3) {
-		ui->mousex = (int)event->button.x;
-		ui->mousey = (int)event->button.y;
-
+	if (button == SDL_BUTTON_RIGHT) {
 		if (ui->holding != NULL) {
 			ui->holding = NULL;
-			gtk_widget_queue_draw(ui->drawing_area);
-			return TRUE;
+			ui->dirty = 1;
+			return;
 		}
 		if (screen_to_board(ui, ui->mousex, ui->mousey, &tmpx, &tmpy)) {
 			ui->visited[tmpx][tmpy] = !ui->visited[tmpx][tmpy];
-			gtk_widget_queue_draw(ui->drawing_area);
+			ui->dirty = 1;
 		}
-		return TRUE;
 	}
-	return FALSE;
 }
 
-static void mode_cb(__attribute__((unused)) GtkComboBox *combo, gpointer data)
+static void on_mode_selected(struct gui *ui, int idx)
 {
-	struct gui *ui = data;
-	gchar *ctext;
-
-	if (ui->suppress_combo_cb)
-		return;
-
-	ctext = gtk_combo_box_get_active_text(GTK_COMBO_BOX(ui->mode_combo_box));
-	if (ctext == NULL)
+	if (idx < 0 || idx >= (int)ARRAYSIZE(mode_items))
 		return;
 
 	ui->holding = NULL;
 
-	if (strcmp(ctext, "Begin New Game") == 0) {
-		g_free(ctext);
+	if (idx == 3) { /* Begin New Game */
 		reset_managed_game(ui);
 		return;
 	}
 
-	if (strcmp(ctext, "Free form") == 0) {
+	if (idx == 2) { /* Free form */
 		ui->mode = MODE_FREE;
 		update_status(ui);
-		gtk_widget_queue_draw(ui->drawing_area);
-		g_free(ctext);
+		ui->dirty = 1;
 		return;
 	}
 
-	if (strcmp(ctext, "Board Setup") == 0) {
+	if (idx == 0) { /* Board Setup */
 		if (ui->use_opponent && ui->opponent != NULL) {
 			/* Returning to setup after starting resets the match */
-			g_free(ctext);
 			reset_managed_game(ui);
 			return;
 		}
 		ui->mode = MODE_BOARD_SETUP;
 		ui->piece_box_open = 2.0;
 		update_status(ui);
-		gtk_widget_queue_draw(ui->drawing_area);
-		g_free(ctext);
+		ui->dirty = 1;
 		return;
 	}
 
-	if (strcmp(ctext, "Play Game") == 0) {
+	if (idx == 1) { /* Play Game */
 		if (ui->use_opponent) {
-			g_free(ctext);
 			start_managed_game(ui);
 			return;
 		}
@@ -2276,276 +2112,666 @@ static void mode_cb(__attribute__((unused)) GtkComboBox *combo, gpointer data)
 		}
 		ui->mode = MODE_PLAYING;
 		update_status(ui);
+		ui->dirty = 1;
 	}
-	g_free(ctext);
-	gtk_widget_queue_draw(ui->drawing_area);
 }
 
-static void redblue_cb(__attribute__((unused)) GtkComboBox *combo,
-		       gpointer data)
+static void on_redblue_selected(struct gui *ui, int idx)
 {
-	struct gui *ui = data;
-	gchar *ctext;
-
-	if (ui->suppress_combo_cb)
-		return;
-
-	ctext = gtk_combo_box_get_active_text(GTK_COMBO_BOX(ui->redblue_combo_box));
-	if (ctext == NULL)
-		return;
-
-	if (strcmp(ctext, "Play as Red") == 0) {
+	if (idx == 0) {
 		ui->playing_as = PLAYING_AS_RED;
 		ui->inverted = 1;
-	} else if (strcmp(ctext, "Play as Blue") == 0) {
+	} else if (idx == 1) {
 		ui->playing_as = PLAYING_AS_BLUE;
 		ui->inverted = 0;
+	} else {
+		return;
 	}
-	g_free(ctext);
 
 	if (ui->use_opponent) {
 		reset_managed_game(ui);
 	} else {
 		update_status(ui);
-		gtk_widget_queue_draw(ui->drawing_area);
+		ui->dirty = 1;
 	}
 }
 
-static void opponent_cb(__attribute__((unused)) GtkComboBox *combo,
-			gpointer data)
+static void on_opponent_selected(struct gui *ui, int idx)
 {
-	struct gui *ui = data;
-	gchar *ctext;
-
-	if (ui->suppress_combo_cb)
-		return;
-
-	ctext = gtk_combo_box_get_active_text(GTK_COMBO_BOX(ui->opponent_combo_box));
-	if (ctext == NULL)
-		return;
-
-	if (strcmp(ctext, "vs Computer") == 0)
+	if (idx == 0)
 		ui->use_opponent = 1;
-	else
+	else if (idx == 1)
 		ui->use_opponent = 0;
-	g_free(ctext);
+	else
+		return;
 
 	reset_managed_game(ui);
 }
 
-static void setup_help_window(struct gui *ui)
+static void place_toolbar_item(SDL_FRect *rect, float width,
+			       float *cx, float *cy, int win_w)
 {
-	GtkWidget *vbox, *view, *scrolled_window;
-	GtkTextBuffer *buffer;
-	GtkTextIter iter;
-	static const char *instructions =
-"   Instructions — Dueling Masters of Space Time\n"
-"   \n"
-"   MODE 1: vs Computer (Default)\n"
-"   1. Choose 'Play as Red' (moves first) or 'Play as Blue' (Computer moves first).\n"
-"   2. Arrange all 18 of your pieces on your half of the board, or click\n"
-"      'Auto Setup' for a randomized defensive/scouting formation.\n"
-"      (Asteroids and your Home Planet must occupy squares by themselves;\n"
-"      fighters may stack with other friendly fighters.)\n"
-"   3. Select 'Play Game' from the top-left menu to begin.\n"
-"   4. On your turn, left-click a piece and click a highlighted destination\n"
-"      square. Pieces enter 'in transit' until moved again; collisions are\n"
-"      resolved recursively and logged at the bottom of the window.\n"
-"      Right-click any square to toggle a personal marker.\n"
-"   5. Destroy the opponent's Home Planet to win!\n"
-"   \n"
-"   MODE 2: Manual (Offline)\n"
-"   1. Select 'Manual (Offline)' from the opponent menu to play with a human\n"
-"      opponent over voice/chat/across a screen using your own boards.\n"
-"   2. Announce which piece you are moving and where it is moving FROM\n"
-"      (never reveal where it is moving TO).\n"
-"   3. Piece strengths (strongest to weakest): A, W, B, X, Y, Z, HP.\n"
-"      Asteroids destroy anything touching them and are destroyed too.\n"
-"   \n";
-
-	scrolled_window = gtk_scrolled_window_new(NULL, NULL);
-	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled_window),
-				       GTK_POLICY_AUTOMATIC,
-				       GTK_POLICY_AUTOMATIC);
-	ui->help = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-	gtk_window_set_title(GTK_WINDOW(ui->help), "DMOST Help");
-	gtk_window_set_default_size(GTK_WINDOW(ui->help), 640, 480);
-	g_signal_connect(ui->help, "delete-event",
-			 G_CALLBACK(close_help_clicked), ui);
-	vbox = gtk_vbox_new(FALSE, 0);
-	view = gtk_text_view_new();
-	gtk_text_view_set_editable(GTK_TEXT_VIEW(view), FALSE);
-	gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(view), FALSE);
-	buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(view));
-	gtk_text_buffer_get_iter_at_offset(buffer, &iter, 0);
-	gtk_text_buffer_insert(buffer, &iter, instructions, -1);
-	gtk_container_add(GTK_CONTAINER(scrolled_window), view);
-	gtk_box_pack_start(GTK_BOX(vbox), scrolled_window, TRUE, TRUE, 0);
-	gtk_container_add(GTK_CONTAINER(ui->help), vbox);
+	if (*cx > TOOLBAR_PAD && *cx + width > (float)win_w - TOOLBAR_PAD) {
+		*cx = TOOLBAR_PAD;
+		*cy += TOOLBAR_BTN_H + TOOLBAR_PAD;
+	}
+	rect->x = *cx;
+	rect->y = *cy;
+	rect->w = width;
+	rect->h = TOOLBAR_BTN_H;
+	*cx += width + TOOLBAR_PAD;
 }
 
-static void init_ui(int *argc, char **argv[], struct gui *ui)
+static void layout_ui(struct gui *ui)
 {
-	GtkWidget *vbox, *hbox, *bottom_hbox, *log_scroll;
-	GtkWidget *invert_button, *quit_button, *help_button;
+	float cx = TOOLBAR_PAD;
+	float cy = TOOLBAR_PAD;
+	float toolbar_h;
+	float bottom_y;
+	float col_h = 0.0f;
+	float status_right;
 
-#if !GLIB_CHECK_VERSION(2, 32, 0)
-	if (!g_thread_supported())
-		g_thread_init(NULL);
-#endif
-	gdk_threads_init();
+	if (ui->win_w < 320)
+		ui->win_w = 320;
+	if (ui->win_h < 320)
+		ui->win_h = 320;
 
-	gtk_init(argc, argv);
+	place_toolbar_item(&ui->mode_dd.rect,
+			   sdl_dropdown_preferred_width(mode_items,
+							ARRAYSIZE(mode_items)),
+			   &cx, &cy, ui->win_w);
+	place_toolbar_item(&ui->opponent_dd.rect,
+			   sdl_dropdown_preferred_width(opponent_items,
+							ARRAYSIZE(opponent_items)),
+			   &cx, &cy, ui->win_w);
+	place_toolbar_item(&ui->redblue_dd.rect,
+			   sdl_dropdown_preferred_width(redblue_items,
+							ARRAYSIZE(redblue_items)),
+			   &cx, &cy, ui->win_w);
+	place_toolbar_item(&ui->auto_setup_btn.rect,
+			   sdl_button_preferred_width(ui->auto_setup_btn.label),
+			   &cx, &cy, ui->win_w);
+	place_toolbar_item(&ui->new_game_btn.rect,
+			   sdl_button_preferred_width(ui->new_game_btn.label),
+			   &cx, &cy, ui->win_w);
+	place_toolbar_item(&ui->invert_btn.rect,
+			   sdl_button_preferred_width(ui->invert_btn.label),
+			   &cx, &cy, ui->win_w);
+	place_toolbar_item(&ui->help_btn.rect,
+			   sdl_button_preferred_width(ui->help_btn.label),
+			   &cx, &cy, ui->win_w);
+	place_toolbar_item(&ui->quit_btn.rect,
+			   sdl_button_preferred_width(ui->quit_btn.label),
+			   &cx, &cy, ui->win_w);
 
-	gdk_color_parse("black", &black);
+	toolbar_h = cy + TOOLBAR_BTN_H + TOOLBAR_PAD;
+	ui->toolbar_rect = (SDL_FRect){ 0.0f, 0.0f, (float)ui->win_w, toolbar_h };
 
-	ui->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-	gtk_window_set_title(GTK_WINDOW(ui->window),
-			     "Dueling Masters of Space Time");
-	gtk_window_set_default_size(GTK_WINDOW(ui->window), 1024, 820);
+	bottom_y = (float)ui->win_h - 4.0f;
+	ui->log_view.rect = (SDL_FRect){
+		4.0f, bottom_y - LOG_BOX_H,
+		(float)ui->win_w - 8.0f, LOG_BOX_H
+	};
+	bottom_y = ui->log_view.rect.y - 2.0f;
 
-	g_signal_connect(ui->window, "delete-event",
-			 G_CALLBACK(quit_clicked), ui);
-	g_signal_connect(ui->window, "destroy",
-			 G_CALLBACK(quit_clicked), ui);
-	g_signal_connect(G_OBJECT(ui->window), "key_press_event",
-			 G_CALLBACK(key_press_cb), ui);
+	if (ui->last_collision_text[0] != '\0') {
+		SDL_Color dummy = { 255, 255, 255, 255 };
+		int lines = sdl_font_draw_wrapped(
+			NULL, NULL, 0.0f, 0.0f, (float)ui->win_w - 16.0f,
+			SDL_UI_FONT_H, 18.0f, ui->last_collision_text,
+			dummy, 0, 0);
+		if (lines < 1)
+			lines = 1;
+		col_h = (float)lines * 18.0f + 6.0f;
+		ui->collision_rect = (SDL_FRect){
+			0.0f, bottom_y - col_h, (float)ui->win_w, col_h
+		};
+		bottom_y = ui->collision_rect.y;
+	} else {
+		ui->collision_rect = (SDL_FRect){ 0.0f, bottom_y, 0.0f, 0.0f };
+	}
 
-	vbox = gtk_vbox_new(FALSE, 2);
-	gtk_container_add(GTK_CONTAINER(ui->window), vbox);
+	ui->status_rect = (SDL_FRect){
+		0.0f, bottom_y - STATUS_BAR_H, (float)ui->win_w, STATUS_BAR_H
+	};
 
-	hbox = gtk_hbox_new(FALSE, 4);
-	ui->hbox = hbox;
+	status_right = (float)ui->win_w - 8.0f;
+	{
+		float pw = sdl_button_preferred_width(ui->pass_btn.label);
+		ui->pass_btn.rect = (SDL_FRect){
+			status_right - pw,
+			ui->status_rect.y + (STATUS_BAR_H - TOOLBAR_BTN_H) * 0.5f,
+			pw, TOOLBAR_BTN_H
+		};
+		status_right = ui->pass_btn.rect.x - 6.0f;
+	}
+	if (ui->play_again_btn.visible) {
+		float gw = sdl_button_preferred_width(ui->play_again_btn.label);
+		ui->play_again_btn.rect = (SDL_FRect){
+			status_right - gw,
+			ui->status_rect.y + (STATUS_BAR_H - TOOLBAR_BTN_H) * 0.5f,
+			gw, TOOLBAR_BTN_H
+		};
+	}
 
-	ui->mode_combo_box = gtk_combo_box_new_text();
-	gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Board Setup");
-	gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Play Game");
-	gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Free form");
-	gtk_combo_box_append_text(GTK_COMBO_BOX(ui->mode_combo_box), "Begin New Game");
-	gtk_combo_box_set_active(GTK_COMBO_BOX(ui->mode_combo_box), 0);
-	gtk_box_pack_start(GTK_BOX(hbox), ui->mode_combo_box, FALSE, FALSE, 2);
-	g_signal_connect(G_OBJECT(ui->mode_combo_box), "changed",
-			 G_CALLBACK(mode_cb), ui);
+	{
+		float bh = ui->status_rect.y - toolbar_h;
+		if (bh < 100.0f)
+			bh = 100.0f;
+		ui->board_rect = (SDL_FRect){
+			0.0f, toolbar_h, (float)ui->win_w, bh
+		};
+		ui->xdim = (int)ui->board_rect.w;
+		ui->ydim = (int)ui->board_rect.h;
+	}
 
-	ui->opponent_combo_box = gtk_combo_box_new_text();
-	gtk_combo_box_append_text(GTK_COMBO_BOX(ui->opponent_combo_box),
-				  "vs Computer");
-	gtk_combo_box_append_text(GTK_COMBO_BOX(ui->opponent_combo_box),
-				  "Manual (Offline)");
-	gtk_combo_box_set_active(GTK_COMBO_BOX(ui->opponent_combo_box), 0);
-	gtk_box_pack_start(GTK_BOX(hbox), ui->opponent_combo_box, FALSE, FALSE, 2);
-	gtk_widget_set_tooltip_text(ui->opponent_combo_box,
-				    "Choose Computer AI or Manual offline board");
-	g_signal_connect(G_OBJECT(ui->opponent_combo_box), "changed",
-			 G_CALLBACK(opponent_cb), ui);
+	if (ui->help_modal.active)
+		sdl_modal_layout(&ui->help_modal, ui->win_w, ui->win_h);
+	if (ui->game_over_modal.active)
+		sdl_modal_layout(&ui->game_over_modal, ui->win_w, ui->win_h);
+}
 
-	ui->redblue_combo_box = gtk_combo_box_new_text();
-	gtk_combo_box_append_text(GTK_COMBO_BOX(ui->redblue_combo_box), "Play as Red");
-	gtk_combo_box_append_text(GTK_COMBO_BOX(ui->redblue_combo_box), "Play as Blue");
-	gtk_combo_box_set_active(GTK_COMBO_BOX(ui->redblue_combo_box), 0);
-	gtk_box_pack_start(GTK_BOX(hbox), ui->redblue_combo_box, FALSE, FALSE, 2);
-	gtk_widget_set_tooltip_text(ui->redblue_combo_box,
-				    "Choose to play as Red or Blue");
-	g_signal_connect(G_OBJECT(ui->redblue_combo_box), "changed",
-			 G_CALLBACK(redblue_cb), ui);
+static void close_all_dropdowns(struct gui *ui)
+{
+	ui->mode_dd.open = 0;
+	ui->mode_dd.hover_index = -1;
+	ui->opponent_dd.open = 0;
+	ui->opponent_dd.hover_index = -1;
+	ui->redblue_dd.open = 0;
+	ui->redblue_dd.hover_index = -1;
+}
 
-	ui->auto_setup_button = gtk_button_new_with_label("Auto Setup");
-	g_signal_connect(ui->auto_setup_button, "clicked",
-			 G_CALLBACK(auto_setup_clicked), ui);
-	gtk_box_pack_start(GTK_BOX(hbox), ui->auto_setup_button, FALSE, FALSE, 2);
-	gtk_widget_set_tooltip_text(ui->auto_setup_button,
-				    "Randomly arrange your pieces in a sensible formation");
+static struct sdl_dropdown *active_open_dropdown(struct gui *ui)
+{
+	if (ui->mode_dd.open)
+		return &ui->mode_dd;
+	if (ui->opponent_dd.open)
+		return &ui->opponent_dd;
+	if (ui->redblue_dd.open)
+		return &ui->redblue_dd;
+	return NULL;
+}
 
-	ui->new_game_button = gtk_button_new_with_label("Begin New Game");
-	g_signal_connect(ui->new_game_button, "clicked",
-			 G_CALLBACK(new_game_clicked), ui);
-	gtk_box_pack_start(GTK_BOX(hbox), ui->new_game_button, FALSE, FALSE, 2);
-	gtk_widget_set_tooltip_text(ui->new_game_button,
-				    "Reset and begin a new game");
+static void update_hover_tooltip(struct gui *ui, float mx, float my)
+{
+	const char *tip = NULL;
 
-	invert_button = gtk_button_new_with_label("Invert Board");
-	g_signal_connect(invert_button, "clicked",
-			 G_CALLBACK(invert_clicked), ui);
-	gtk_box_pack_start(GTK_BOX(hbox), invert_button, FALSE, FALSE, 2);
-	gtk_widget_set_tooltip_text(invert_button,
-				    "Invert Board so that your half is on the bottom");
+	if (active_open_dropdown(ui) != NULL ||
+	    ui->help_modal.active || ui->game_over_modal.active) {
+		if (ui->hover_tooltip != NULL) {
+			ui->hover_tooltip = NULL;
+			ui->dirty = 1;
+		}
+		return;
+	}
 
-	help_button = gtk_button_new_with_label("Help");
-	g_signal_connect(help_button, "clicked", G_CALLBACK(help_clicked), ui);
-	gtk_box_pack_start(GTK_BOX(hbox), help_button, FALSE, FALSE, 2);
+	if (sdl_point_in_rect(mx, my, ui->opponent_dd.rect))
+		tip = ui->opponent_dd.tooltip;
+	else if (sdl_point_in_rect(mx, my, ui->redblue_dd.rect))
+		tip = ui->redblue_dd.tooltip;
+	else if (sdl_point_in_rect(mx, my, ui->auto_setup_btn.rect))
+		tip = ui->auto_setup_btn.tooltip;
+	else if (sdl_point_in_rect(mx, my, ui->new_game_btn.rect))
+		tip = ui->new_game_btn.tooltip;
+	else if (sdl_point_in_rect(mx, my, ui->invert_btn.rect))
+		tip = ui->invert_btn.tooltip;
+	else if (sdl_point_in_rect(mx, my, ui->quit_btn.rect))
+		tip = ui->quit_btn.tooltip;
 
-	quit_button = gtk_button_new_with_label("Quit Dueling");
-	g_signal_connect(quit_button, "clicked", G_CALLBACK(quit_clicked), ui);
-	gtk_box_pack_start(GTK_BOX(hbox), quit_button, FALSE, FALSE, 2);
-	gtk_widget_set_tooltip_text(quit_button, "Quit Dueling");
+	if (tip != ui->hover_tooltip) {
+		ui->hover_tooltip = tip;
+		ui->dirty = 1;
+	}
+}
 
-	gtk_box_pack_start(GTK_BOX(vbox), hbox, FALSE, FALSE, 2);
+static void render_ui(struct gui *ui)
+{
+	struct sdl_dropdown *open_dd;
 
-	ui->drawing_area = gtk_drawing_area_new();
-	ui->xdim = 600;
-	ui->ydim = 600;
-	gtk_widget_set_size_request(GTK_WIDGET(ui->drawing_area),
-				    ui->xdim, ui->ydim);
-	gtk_widget_modify_bg(ui->drawing_area, GTK_STATE_NORMAL, &black);
-	g_signal_connect(G_OBJECT(ui->drawing_area), "expose_event",
-			 G_CALLBACK(on_expose_drawing_area), ui);
-	g_signal_connect(G_OBJECT(ui->drawing_area), "configure_event",
-			 G_CALLBACK(on_config_drawing_area), ui);
-	g_signal_connect(G_OBJECT(ui->drawing_area), "motion_notify_event",
-			 G_CALLBACK(on_mouse_motion), ui);
-	g_signal_connect(G_OBJECT(ui->drawing_area), "button_press_event",
-			 G_CALLBACK(on_button_clicked), ui);
+	SDL_SetRenderDrawColor(ui->renderer, 16, 18, 24, 255);
+	SDL_RenderClear(ui->renderer);
 
-	gtk_widget_set_events(ui->drawing_area,
-			      GDK_EXPOSURE_MASK | GDK_LEAVE_NOTIFY_MASK |
-			      GDK_BUTTON_PRESS_MASK | GDK_POINTER_MOTION_MASK |
-			      GDK_POINTER_MOTION_HINT_MASK);
-	gtk_box_pack_start(GTK_BOX(vbox), ui->drawing_area, TRUE, TRUE, 0);
+	render_board(ui);
 
-	/* Status bar + Pass button */
-	bottom_hbox = gtk_hbox_new(FALSE, 6);
-	ui->status_label = gtk_label_new("");
-	gtk_misc_set_alignment(GTK_MISC(ui->status_label), 0.0, 0.5);
-	gtk_box_pack_start(GTK_BOX(bottom_hbox), ui->status_label,
-			   TRUE, TRUE, 6);
+	/* Toolbar */
+	sdl_gfx_fill_rect(ui->renderer, ui->toolbar_rect.x, ui->toolbar_rect.y,
+			  ui->toolbar_rect.w, ui->toolbar_rect.h,
+			  sdl_rgba_f(0.11, 0.13, 0.17, 1.0));
+	sdl_gfx_fill_rect(ui->renderer, 0.0f, ui->toolbar_rect.h - 1.0f,
+			  (float)ui->win_w, 1.0f,
+			  sdl_rgba_f(0.28, 0.32, 0.40, 1.0));
 
-	ui->pass_button = gtk_button_new_with_label("Pass Turn");
-	g_signal_connect(ui->pass_button, "clicked",
-			 G_CALLBACK(pass_clicked), ui);
-	gtk_widget_set_sensitive(ui->pass_button, FALSE);
-	gtk_box_pack_end(GTK_BOX(bottom_hbox), ui->pass_button, FALSE, FALSE, 6);
+	sdl_dropdown_draw_closed(ui->renderer, &ui->font, &ui->mode_dd);
+	sdl_dropdown_draw_closed(ui->renderer, &ui->font, &ui->opponent_dd);
+	sdl_dropdown_draw_closed(ui->renderer, &ui->font, &ui->redblue_dd);
+	sdl_button_draw(ui->renderer, &ui->font, &ui->auto_setup_btn);
+	sdl_button_draw(ui->renderer, &ui->font, &ui->new_game_btn);
+	sdl_button_draw(ui->renderer, &ui->font, &ui->invert_btn);
+	sdl_button_draw(ui->renderer, &ui->font, &ui->help_btn);
+	sdl_button_draw(ui->renderer, &ui->font, &ui->quit_btn);
 
-	ui->play_again_button = gtk_button_new_with_label("Begin New Game");
-	g_signal_connect(ui->play_again_button, "clicked",
-			 G_CALLBACK(new_game_clicked), ui);
-	gtk_box_pack_end(GTK_BOX(bottom_hbox), ui->play_again_button,
-			 FALSE, FALSE, 4);
-	gtk_box_pack_start(GTK_BOX(vbox), bottom_hbox, FALSE, FALSE, 2);
+	/* Status bar */
+	sdl_gfx_fill_rect(ui->renderer, ui->status_rect.x, ui->status_rect.y,
+			  ui->status_rect.w, ui->status_rect.h,
+			  sdl_rgba_f(0.10, 0.12, 0.16, 1.0));
+	sdl_gfx_fill_rect(ui->renderer, 0.0f, ui->status_rect.y,
+			  (float)ui->win_w, 1.0f,
+			  sdl_rgba_f(0.26, 0.30, 0.38, 1.0));
 
-	/* Collision banner above combat log */
-	ui->collision_label = gtk_label_new("");
-	gtk_misc_set_alignment(GTK_MISC(ui->collision_label), 0.0, 0.5);
-	gtk_label_set_line_wrap(GTK_LABEL(ui->collision_label), TRUE);
-	gtk_box_pack_start(GTK_BOX(vbox), ui->collision_label, FALSE, FALSE, 2);
+	{
+		float right_limit = ui->play_again_btn.visible
+				    ? ui->play_again_btn.rect.x - 8.0f
+				    : ui->pass_btn.rect.x - 8.0f;
+		SDL_Rect clip = {
+			8, (int)ui->status_rect.y,
+			(int)(right_limit - 8.0f), (int)ui->status_rect.h
+		};
+		if (clip.w > 0) {
+			SDL_RenderSetClipRect(ui->renderer, &clip);
+			sdl_font_draw(ui->renderer, &ui->font,
+				      10.0f,
+				      ui->status_rect.y +
+				      ui->status_rect.h * 0.5f,
+				      SDL_UI_FONT_H, ui->status_text,
+				      SDL_ALIGN_LEFT,
+				      sdl_rgba_f(0.90, 0.93, 0.97, 1.0));
+			SDL_RenderSetClipRect(ui->renderer, NULL);
+		}
+	}
+	sdl_button_draw(ui->renderer, &ui->font, &ui->play_again_btn);
+	sdl_button_draw(ui->renderer, &ui->font, &ui->pass_btn);
 
-	/* Compact scrollable combat/event log */
-	log_scroll = gtk_scrolled_window_new(NULL, NULL);
-	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(log_scroll),
-				       GTK_POLICY_AUTOMATIC,
-				       GTK_POLICY_AUTOMATIC);
-	gtk_widget_set_size_request(log_scroll, -1, 80);
-	ui->log_view = gtk_text_view_new();
-	gtk_text_view_set_editable(GTK_TEXT_VIEW(ui->log_view), FALSE);
-	gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(ui->log_view), FALSE);
-	gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(ui->log_view), GTK_WRAP_WORD);
-	ui->log_buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(ui->log_view));
-	ui->log_collision_tag = gtk_text_buffer_create_tag(
-		ui->log_buffer, "collision",
-		"foreground", "#d94e1f",
-		"weight", PANGO_WEIGHT_BOLD,
-		NULL);
-	gtk_container_add(GTK_CONTAINER(log_scroll), ui->log_view);
-	gtk_box_pack_start(GTK_BOX(vbox), log_scroll, FALSE, FALSE, 2);
+	/* Collision banner */
+	if (ui->last_collision_text[0] != '\0' && ui->collision_rect.h > 0.0f) {
+		SDL_Color col_text = { 242, 110, 56, 255 };
+
+		sdl_gfx_fill_rect(ui->renderer, ui->collision_rect.x,
+				  ui->collision_rect.y, ui->collision_rect.w,
+				  ui->collision_rect.h,
+				  sdl_rgba_f(0.14, 0.09, 0.08, 1.0));
+		sdl_font_draw_wrapped(ui->renderer, &ui->font, 8.0f,
+				      ui->collision_rect.y + 3.0f,
+				      (float)ui->win_w - 16.0f,
+				      SDL_UI_FONT_H, 18.0f,
+				      ui->last_collision_text, col_text,
+				      0, 0);
+	}
+
+	/* Scrollable log */
+	sdl_log_draw(ui->renderer, &ui->font, &ui->log_view);
+
+	/* Open dropdown popup on top of toolbar/board */
+	open_dd = active_open_dropdown(ui);
+	if (open_dd != NULL)
+		sdl_dropdown_draw_popup(ui->renderer, &ui->font,
+					open_dd, ui->win_w);
+
+	/* Tooltip */
+	if (ui->hover_tooltip != NULL && open_dd == NULL &&
+	    !ui->help_modal.active && !ui->game_over_modal.active) {
+		sdl_ui_draw_tooltip(ui->renderer, &ui->font, ui->hover_tooltip,
+				    (float)ui->win_mousex,
+				    (float)ui->win_mousey,
+				    ui->win_w, ui->win_h);
+	}
+
+	/* Modals last */
+	if (ui->help_modal.active)
+		sdl_modal_draw(ui->renderer, &ui->font, &ui->help_modal,
+			       ui->win_w, ui->win_h);
+	if (ui->game_over_modal.active)
+		sdl_modal_draw(ui->renderer, &ui->font, &ui->game_over_modal,
+			       ui->win_w, ui->win_h);
+
+	SDL_RenderPresent(ui->renderer);
+	ui->dirty = 0;
+}
+
+static void update_timers(struct gui *ui, Uint32 now)
+{
+	if (ui->anim_count > 0) {
+		int dt = (int)(now - ui->anim_last_tick_ms);
+		struct anim_step *step;
+
+		if (dt < 0)
+			dt = 0;
+		if (dt > 100)
+			dt = 100;
+		ui->anim_last_tick_ms = now;
+
+		if (dt > 0) {
+			step = &ui->anim_queue[ui->anim_head];
+			step->elapsed_ms += dt;
+			while (ui->anim_count > 0) {
+				step = &ui->anim_queue[ui->anim_head];
+				if (step->elapsed_ms < step->duration_ms)
+					break;
+				ui->anim_head = (ui->anim_head + 1) %
+						ANIM_QUEUE_CAP;
+				ui->anim_count--;
+			}
+			ui->dirty = 1;
+		}
+		if (ui->anim_count <= 0 && ui->game_over_pending &&
+		    !ui->game_over_shown && !ui->game_over_scheduled) {
+			schedule_game_over_dialog(ui);
+		}
+	}
+
+	if (ui->poll_scheduled &&
+	    (Sint32)(now - ui->poll_due_ms) >= 0) {
+		process_opponent_poll(ui);
+	}
+
+	if (ui->game_over_scheduled &&
+	    (Sint32)(now - ui->game_over_due_ms) >= 0) {
+		if (!is_managed_mode(ui) ||
+		    ui->board.phase != PHASE_GAME_OVER ||
+		    ui->game_over_shown) {
+			ui->game_over_scheduled = 0;
+		} else if (ui->anim_count > 0) {
+			ui->game_over_due_ms = now + 50;
+		} else {
+			open_game_over_modal(ui);
+		}
+	}
+}
+
+static void handle_event(struct gui *ui, const SDL_Event *ev)
+{
+	int consumed = 0, modal_redraw = 0;
+	enum sdl_modal_result mres;
+
+	if (ev->type == SDL_QUIT) {
+		quit_clicked(ui);
+		return;
+	}
+
+	if (ev->type == SDL_WINDOWEVENT) {
+		if (ev->window.event == SDL_WINDOWEVENT_RESIZED ||
+		    ev->window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+			SDL_GetWindowSize(ui->window, &ui->win_w, &ui->win_h);
+			layout_ui(ui);
+			ui->dirty = 1;
+		} else if (ev->window.event == SDL_WINDOWEVENT_EXPOSED) {
+			ui->dirty = 1;
+		}
+		return;
+	}
+
+	if (ui->game_over_modal.active) {
+		mres = sdl_modal_handle_event(&ui->game_over_modal, ev,
+					      ui->win_w, ui->win_h,
+					      &consumed, &modal_redraw);
+		if (modal_redraw)
+			ui->dirty = 1;
+		if (mres == SDL_MODAL_PRIMARY)
+			reset_managed_game(ui);
+		else if (mres == SDL_MODAL_SECONDARY ||
+			 mres == SDL_MODAL_DISMISSED)
+			ui->dirty = 1;
+		if (consumed)
+			return;
+	}
+
+	if (ui->help_modal.active) {
+		mres = sdl_modal_handle_event(&ui->help_modal, ev,
+					      ui->win_w, ui->win_h,
+					      &consumed, &modal_redraw);
+		if (modal_redraw || mres != SDL_MODAL_NONE)
+			ui->dirty = 1;
+		if (consumed)
+			return;
+	}
+
+	if (ev->type == SDL_KEYDOWN) {
+		switch (ev->key.keysym.sym) {
+		case SDLK_F11:
+			ui->fullscreen = !ui->fullscreen;
+			SDL_SetWindowFullscreen(ui->window,
+						ui->fullscreen
+						? SDL_WINDOW_FULLSCREEN_DESKTOP
+						: 0);
+			SDL_GetWindowSize(ui->window, &ui->win_w, &ui->win_h);
+			layout_ui(ui);
+			ui->dirty = 1;
+			break;
+		case SDLK_ESCAPE:
+			if (active_open_dropdown(ui) != NULL) {
+				close_all_dropdowns(ui);
+				ui->dirty = 1;
+			} else if (ui->holding != NULL) {
+				ui->holding = NULL;
+				ui->dirty = 1;
+			}
+			break;
+		default:
+			break;
+		}
+		return;
+	}
+
+	if (ev->type == SDL_MOUSEMOTION) {
+		float mx = (float)ev->motion.x;
+		float my = (float)ev->motion.y;
+		struct sdl_dropdown *open_dd;
+
+		ui->win_mousex = ev->motion.x;
+		ui->win_mousey = ev->motion.y;
+
+		if (sdl_log_handle_mouse_motion(&ui->log_view, mx, my))
+			ui->dirty = 1;
+
+		open_dd = active_open_dropdown(ui);
+		if (open_dd != NULL) {
+			if (sdl_dropdown_handle_motion(open_dd, mx, my,
+						       ui->win_w))
+				ui->dirty = 1;
+			update_hover_tooltip(ui, mx, my);
+			return;
+		}
+
+		ui->dirty |= sdl_dropdown_handle_motion(&ui->mode_dd, mx, my, ui->win_w);
+		ui->dirty |= sdl_dropdown_handle_motion(&ui->opponent_dd, mx, my, ui->win_w);
+		ui->dirty |= sdl_dropdown_handle_motion(&ui->redblue_dd, mx, my, ui->win_w);
+		ui->dirty |= sdl_button_handle_motion(&ui->auto_setup_btn, mx, my);
+		ui->dirty |= sdl_button_handle_motion(&ui->new_game_btn, mx, my);
+		ui->dirty |= sdl_button_handle_motion(&ui->invert_btn, mx, my);
+		ui->dirty |= sdl_button_handle_motion(&ui->help_btn, mx, my);
+		ui->dirty |= sdl_button_handle_motion(&ui->quit_btn, mx, my);
+		ui->dirty |= sdl_button_handle_motion(&ui->pass_btn, mx, my);
+		ui->dirty |= sdl_button_handle_motion(&ui->play_again_btn, mx, my);
+
+		update_hover_tooltip(ui, mx, my);
+
+		if (sdl_point_in_rect(mx, my, ui->board_rect)) {
+			ui->mousex = (int)(mx - ui->board_rect.x);
+			ui->mousey = (int)(my - ui->board_rect.y);
+			hide_or_show_piecebox(ui);
+			if (ui->holding != NULL)
+				ui->dirty = 1;
+		}
+		return;
+	}
+
+	if (ev->type == SDL_MOUSEWHEEL) {
+		if (sdl_log_handle_wheel(&ui->log_view, ev->wheel.y,
+					 (float)ui->win_mousex,
+					 (float)ui->win_mousey))
+			ui->dirty = 1;
+		return;
+	}
+
+	if (ev->type == SDL_MOUSEBUTTONDOWN) {
+		float mx = (float)ev->button.x;
+		float my = (float)ev->button.y;
+
+		if (ev->button.button == SDL_BUTTON_LEFT) {
+			struct sdl_dropdown *open_dd = active_open_dropdown(ui);
+			int sel = -1;
+
+			if (open_dd != NULL) {
+				sdl_dropdown_handle_click(open_dd, mx, my,
+							  ui->win_w, &sel);
+				ui->dirty = 1;
+				if (sel >= 0) {
+					if (open_dd == &ui->mode_dd)
+						on_mode_selected(ui, sel);
+					else if (open_dd == &ui->opponent_dd)
+						on_opponent_selected(ui, sel);
+					else if (open_dd == &ui->redblue_dd)
+						on_redblue_selected(ui, sel);
+				}
+				return;
+			}
+
+			if (sdl_dropdown_handle_click(&ui->mode_dd, mx, my,
+						      ui->win_w, &sel) ||
+			    sdl_dropdown_handle_click(&ui->opponent_dd, mx, my,
+						      ui->win_w, &sel) ||
+			    sdl_dropdown_handle_click(&ui->redblue_dd, mx, my,
+						      ui->win_w, &sel)) {
+				ui->dirty = 1;
+				return;
+			}
+
+			if (sdl_button_handle_mouse_down(&ui->auto_setup_btn, mx, my) ||
+			    sdl_button_handle_mouse_down(&ui->new_game_btn, mx, my) ||
+			    sdl_button_handle_mouse_down(&ui->invert_btn, mx, my) ||
+			    sdl_button_handle_mouse_down(&ui->help_btn, mx, my) ||
+			    sdl_button_handle_mouse_down(&ui->quit_btn, mx, my) ||
+			    sdl_button_handle_mouse_down(&ui->pass_btn, mx, my) ||
+			    sdl_button_handle_mouse_down(&ui->play_again_btn, mx, my) ||
+			    sdl_log_handle_mouse_down(&ui->log_view, mx, my)) {
+				ui->dirty = 1;
+				return;
+			}
+		}
+
+		if (sdl_point_in_rect(mx, my, ui->board_rect)) {
+			handle_board_button_down(
+				ui, ev->button.button,
+				(int)(mx - ui->board_rect.x),
+				(int)(my - ui->board_rect.y));
+		}
+		return;
+	}
+
+	if (ev->type == SDL_MOUSEBUTTONUP &&
+	    ev->button.button == SDL_BUTTON_LEFT) {
+		float mx = (float)ev->button.x;
+		float my = (float)ev->button.y;
+		int c_auto = 0, c_new = 0, c_inv = 0, c_help = 0;
+		int c_quit = 0, c_pass = 0, c_again = 0;
+
+		if (sdl_log_handle_mouse_up(&ui->log_view))
+			ui->dirty = 1;
+
+		ui->dirty |= sdl_button_handle_mouse_up(&ui->auto_setup_btn, mx, my, &c_auto);
+		ui->dirty |= sdl_button_handle_mouse_up(&ui->new_game_btn, mx, my, &c_new);
+		ui->dirty |= sdl_button_handle_mouse_up(&ui->invert_btn, mx, my, &c_inv);
+		ui->dirty |= sdl_button_handle_mouse_up(&ui->help_btn, mx, my, &c_help);
+		ui->dirty |= sdl_button_handle_mouse_up(&ui->quit_btn, mx, my, &c_quit);
+		ui->dirty |= sdl_button_handle_mouse_up(&ui->pass_btn, mx, my, &c_pass);
+		ui->dirty |= sdl_button_handle_mouse_up(&ui->play_again_btn, mx, my, &c_again);
+
+		if (c_auto)
+			auto_setup_clicked(ui);
+		else if (c_new)
+			reset_managed_game(ui);
+		else if (c_inv)
+			invert_clicked(ui);
+		else if (c_help)
+			help_clicked(ui);
+		else if (c_quit)
+			quit_clicked(ui);
+		else if (c_pass)
+			pass_clicked(ui);
+		else if (c_again)
+			reset_managed_game(ui);
+	}
+}
+
+static int init_ui(struct gui *ui)
+{
+	if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+		fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
+		return -1;
+	}
+
+	ui->win_w = 1024;
+	ui->win_h = 820;
+	ui->window = SDL_CreateWindow("Dueling Masters of Space Time",
+				      SDL_WINDOWPOS_CENTERED,
+				      SDL_WINDOWPOS_CENTERED,
+				      ui->win_w, ui->win_h,
+				      SDL_WINDOW_RESIZABLE);
+	if (ui->window == NULL) {
+		fprintf(stderr, "SDL_CreateWindow failed: %s\n",
+			SDL_GetError());
+		SDL_Quit();
+		return -1;
+	}
+	SDL_SetWindowMinimumSize(ui->window, 640, 520);
+
+	ui->renderer = SDL_CreateRenderer(
+		ui->window, -1,
+		SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+	if (ui->renderer == NULL) {
+		ui->renderer = SDL_CreateRenderer(ui->window, -1,
+						  SDL_RENDERER_SOFTWARE);
+	}
+	if (ui->renderer == NULL) {
+		fprintf(stderr, "SDL_CreateRenderer failed: %s\n",
+			SDL_GetError());
+		SDL_DestroyWindow(ui->window);
+		SDL_Quit();
+		return -1;
+	}
+
+	if (sdl_font_init(&ui->font, ui->renderer) != 0) {
+		fprintf(stderr, "sdl_font_init failed\n");
+		SDL_DestroyRenderer(ui->renderer);
+		SDL_DestroyWindow(ui->window);
+		SDL_Quit();
+		return -1;
+	}
+
+	ui->galaxy_tex = sdl_load_png_texture(ui->renderer, "pinwheel.png",
+					      &ui->galaxy_w, &ui->galaxy_h);
+	if (ui->galaxy_tex == NULL) {
+		ui->galaxy_tex = sdl_load_png_texture(ui->renderer,
+						      "src/pinwheel.png",
+						      &ui->galaxy_w,
+						      &ui->galaxy_h);
+	}
+
+	sdl_dropdown_init(&ui->mode_dd, mode_items, ARRAYSIZE(mode_items),
+			  0, NULL);
+	sdl_dropdown_init(&ui->opponent_dd, opponent_items,
+			  ARRAYSIZE(opponent_items), 0,
+			  "Choose Computer AI or Manual offline board");
+	sdl_dropdown_init(&ui->redblue_dd, redblue_items,
+			  ARRAYSIZE(redblue_items), 0,
+			  "Choose to play as Red or Blue");
+
+	sdl_button_init(&ui->auto_setup_btn, "Auto Setup",
+			"Randomly arrange your pieces in a sensible formation");
+	sdl_button_init(&ui->new_game_btn, "Begin New Game",
+			"Reset and begin a new game");
+	sdl_button_init(&ui->invert_btn, "Invert Board",
+			"Invert Board so that your half is on the bottom");
+	sdl_button_init(&ui->help_btn, "Help", NULL);
+	sdl_button_init(&ui->quit_btn, "Quit Dueling", "Quit Dueling");
+	sdl_button_init(&ui->pass_btn, "Pass Turn", NULL);
+	ui->pass_btn.enabled = 0;
+	sdl_button_init(&ui->play_again_btn, "Begin New Game", NULL);
+	ui->play_again_btn.visible = 0;
+	ui->play_again_btn.accent = 1;
+
+	sdl_log_init(&ui->log_view);
+	sdl_modal_init(&ui->help_modal);
+	sdl_modal_init(&ui->game_over_modal);
 
 	ui->inverted = 1;
 	ui->piece_box_open = 2.0;
@@ -2554,99 +2780,59 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 	ui->fullscreen = 0;
 	ui->mode = MODE_BOARD_SETUP;
 	ui->use_opponent = 1;
-	ui->suppress_combo_cb = 0;
 	ui->opponent = NULL;
-	ui->poll_timer_id = 0;
+	ui->poll_scheduled = 0;
 	ui->setup_rng = (uint32_t)time(NULL) ^ 0x5a5a5a5au;
 	ui->game_counter = 0;
 	memset(ui->visited, 0, sizeof(ui->visited));
+	ui->dirty = 1;
+	ui->quit = 0;
 
-	setup_help_window(ui);
-	gtk_widget_show_all(ui->window);
-	gtk_widget_hide(ui->play_again_button);
+	layout_ui(ui);
+	return 0;
 }
 
-static void generic_draw_piece_on_board(struct piece *p, cairo_t *cr,
-					double radius_scale)
+static void cleanup_ui(struct gui *ui)
 {
-	double radius;
-	double x1, y1, x2, y2;
-	int show_trail;
-
-	if (ui.xdim / ui.piece_box_open < ui.ydim)
-		radius = (0.75 * ui.xdim / (12.0 * ui.piece_box_open)) / 2.0;
-	else
-		radius = (0.75 * ui.ydim / 12.0) / 2.0;
-	radius *= radius_scale;
-
-	show_trail = (p->prevx != -1) &&
-		(is_managed_mode(&ui) ||
-		 (ui.playing_as == PLAYING_AS_RED && p->r > 0.9) ||
-		 (ui.playing_as == PLAYING_AS_BLUE && p->b > 0.9));
-
-	/* draw trail */
-	if (show_trail) {
-		cairo_save(cr);
-		cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
-		cairo_set_line_width(cr,
-				     MIN(ui.xdim / ui.piece_box_open, ui.ydim) /
-				     64.0);
-		cairo_set_source_rgba(cr, p->r, p->g, p->b, 0.35);
-		x1 = (p->x + 1.5) * ui.xdim / (12.0 * ui.piece_box_open);
-		y1 = (invert(p->y) + 1.5) * (ui.ydim / 12.0);
-		x2 = (p->prevx + 1.5) * ui.xdim / (12.0 * ui.piece_box_open);
-		y2 = (invert(p->prevy) + 1.5) * (ui.ydim / 12.0);
-		cairo_move_to(cr, x1, y1);
-		if (p->strength == WFIGHTER) {
-			double tx, ty;
-			double factor = ui.inverted ? -1.0 : 1.0;
-
-			if (abs(p->x - p->prevx) < abs(p->y - p->prevy)) {
-				if (p->prevx < p->x)
-					tx = x1 - ui.xdim / (12.0 * ui.piece_box_open);
-				else
-					tx = x1 + ui.xdim / (12.0 * ui.piece_box_open);
-				ty = y1;
-			} else {
-				if (p->prevy < p->y)
-					ty = y1 - factor * ui.ydim / 12.0;
-				else
-					ty = y1 + factor * ui.ydim / 12.0;
-				tx = x1;
-			}
-			cairo_line_to(cr, tx, ty);
-		}
-		cairo_line_to(cr, x2, y2);
-		cairo_stroke(cr);
-		cairo_restore(cr);
+	cancel_poll_timer(ui);
+	clear_animations(ui);
+	dismiss_game_over_dialog(ui);
+	if (ui->opponent != NULL) {
+		dmost_opponent_destroy(ui->opponent);
+		ui->opponent = NULL;
 	}
-
-	cairo_save(cr);
-	cairo_arc(cr, p->sx, p->sy, radius, 0.0, 2.0 * M_PI);
-	cairo_set_source_rgba(cr, p->r, p->g, p->b, 0.25);
-	cairo_fill_preserve(cr);
-	cairo_stroke(cr);
-	cairo_restore(cr);
-
-	cairo_save(cr);
-	cairo_set_line_width(cr, MIN(ui.xdim, ui.ydim) / 200.0);
-	if (p->in_transit) {
-		static double transit_dash[] = { 4.0, 3.0 };
-		cairo_set_dash(cr, transit_dash, 2, 0.0);
+	if (ui->galaxy_tex != NULL) {
+		SDL_DestroyTexture(ui->galaxy_tex);
+		ui->galaxy_tex = NULL;
 	}
-	cairo_set_source_rgba(cr, p->r, p->g, p->b, 1.0);
-	cairo_arc(cr, p->sx, p->sy, radius * 1.1, 0.0, 2.0 * M_PI);
-	cairo_stroke(cr);
-	cairo_restore(cr);
+	sdl_font_destroy(&ui->font);
+	if (ui->renderer != NULL) {
+		SDL_DestroyRenderer(ui->renderer);
+		ui->renderer = NULL;
+	}
+	if (ui->window != NULL) {
+		SDL_DestroyWindow(ui->window);
+		ui->window = NULL;
+	}
+	SDL_Quit();
+}
 
-	cairo_save(cr);
-	cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 1.0);
-	if (radius > 12.0)
-		draw_centered_text(cr, p->sx, p->sy,
-				   MIN(ui.xdim, ui.ydim) / 32.0 * radius_scale,
-				   p->name);
-	cairo_stroke(cr);
-	cairo_restore(cr);
+static void dmost_frame_step(struct gui *ui, int wait_ms)
+{
+	SDL_Event ev;
+
+	if (wait_ms > 0) {
+		if (SDL_WaitEventTimeout(&ev, wait_ms))
+			handle_event(ui, &ev);
+	}
+	while (!ui->quit && SDL_PollEvent(&ev))
+		handle_event(ui, &ev);
+
+	if (!ui->quit)
+		update_timers(ui, SDL_GetTicks());
+
+	if (!ui->quit && ui->dirty)
+		render_ui(ui);
 }
 
 static void init_pieces(struct piece **p1_out, struct piece **p2_out)
@@ -2668,12 +2854,30 @@ static void init_pieces(struct piece **p1_out, struct piece **p2_out)
 
 int main(int argc, char *argv[])
 {
-	init_pieces(&p1, &p2);
-	init_ui(&argc, &argv, &ui);
-	reset_managed_game(&ui);
+	(void)argc;
+	(void)argv;
 
-	gdk_threads_enter();
-	gtk_main();
-	gdk_threads_leave();
+	init_pieces(&p1, &p2);
+	if (init_ui(&ui) != 0) {
+		free(p1);
+		free(p2);
+		return 1;
+	}
+	reset_managed_game(&ui);
+	render_ui(&ui);
+
+	while (!ui.quit) {
+		int wait_ms = 250;
+
+		if (ui.anim_count > 0)
+			wait_ms = 16;
+		else if (ui.poll_scheduled || ui.game_over_scheduled)
+			wait_ms = 50;
+		dmost_frame_step(&ui, wait_ms);
+	}
+
+	cleanup_ui(&ui);
+	free(p1);
+	free(p2);
 	return 0;
 }
