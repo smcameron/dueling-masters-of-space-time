@@ -1,13 +1,13 @@
 
-CFLAGS=-w -Wall -g
+CFLAGS=-Wall -Wextra -Wno-deprecated-declarations -g
 ENGINE_CFLAGS=-Wall -Wextra -Werror -g
 GTK_CFLAGS = `pkg-config --cflags gtk+-2.0 gthread-2.0`
 GTK_LDFLAGS = `pkg-config --libs gtk+-2.0 gthread-2.0`
 
 all:	dmost
 
-dmost:	dmost.c
-	gcc -o dmost ${CFLAGS} ${GTK_CFLAGS} dmost.c ${GTK_LDFLAGS}
+dmost:	dmost.c game.o ai.o game.h ai.h opponent.h
+	gcc -o dmost ${CFLAGS} ${GTK_CFLAGS} dmost.c game.o ai.o ${GTK_LDFLAGS} -lm
 
 game.o:	game.c game.h
 	gcc -c ${ENGINE_CFLAGS} game.c
