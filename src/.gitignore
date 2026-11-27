@@ -2,3 +2,4 @@ dmost
 test_game
 test_ai
 *.o
+web/
