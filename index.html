@@ -42,9 +42,12 @@ highlighted.</td></tr></table>
 <p align=center><img src="ready-to-play.jpg">
 <p align=center>Ready to play...
 
-<p align=center><iframe width="560" height="315" src="http://www.youtube.com/embed/khRVgeZ8RRo" frameborder="0" allowfullscreen></iframe>
-<p align=center>There's also a linux version (probably compiles
-for Mac as well with gtk libs).
+<p align=center><iframe width="560" height="315" src="https://www.youtube.com/embed/khRVgeZ8RRo" title="Dueling Masters of Space-Time Linux/GTK+ demo" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+<p align=center>There's also a Linux/GTK+ version (probably compiles
+for Mac as well with GTK+ 2 libs) that now includes a built-in computer
+opponent in addition to the manual offline board shown above
+(<a href="https://www.youtube.com/watch?v=khRVgeZ8RRo">watch on YouTube</a>;
+<a href="#computer-version">see Computer Version below</a>).
 
 <p><b>Setup</b>
 
@@ -208,6 +211,43 @@ ships before the game ends, as this is already a bit of a problem.
 <p>So, there is probably some room for improvement
 in the rules.  Feel free to develop your own house rules.
 
+<hr>
+<p><a name="computer-version"></a><b>Computer Version (GTK+ / Linux)</b>
+<p>The source code on the <code>master</code> branch includes a GTK+ 2
+application (<code>dmost</code>) featuring a built-in computer opponent as well
+as the original manual board mode:
+<ul>
+<li><b>vs Computer (Default):</b> Play against a built-in, non-cheating AI
+opponent backed by private per-player boards and the same departure/collision
+message protocol as the tabletop game (the computer never sees your hidden
+pieces).  You can choose <b>Play as Red</b> (moves first) or <b>Play as Blue</b>
+(computer moves first), and arrange your 18 pieces manually or click
+<b>Auto Setup</b> for a randomized legal defensive/scouting formation.
+<li><b>Automatic Rules &amp; Visual Feedback:</b> In <b>vs Computer</b> mode,
+setup constraints (territory bounds, asteroid/Home Planet isolation, fighter
+stacking), legal moves (including W-fighter 2-then-1 L-paths and blocking by
+your own obstacles), recursive collision resolution, <b>Pass Turn</b> when no
+legal moves exist, and win/draw detection (including Y-fighter square-parity
+draws) are enforced automatically.  Legal destinations and confirmed-clear
+enemy squares are highlighted, in-transit pieces display a dashed ring,
+movement trails show prior positions, and opponent moves and collision replays
+are animated (slides, reveal pulses, and amber impact starbursts).  Destroyed
+pieces remain visible at their collision squares as semi-transparent crossed-out
+markers alongside amber collision outlines, a bold collision banner, and a
+scrollable combat/event log.  Right-click toggles personal square markers,
+<b>Invert Board</b> flips the board vertically, <b>F11</b> toggles fullscreen,
+and a Game Over banner/dialog offers <b>Play Again</b> and <b>View Board</b>.
+<li><b>Manual (Offline) &amp; Free form:</b> Switch to
+<b>Manual (Offline)</b> to use the board as a tabletop helper when playing a
+human opponent over voice, chat, or across a room, or choose <b>Free form</b>
+to move pieces without rules enforced.
+<li><b>Building from Source:</b> The source code is in <code>src/</code> on the
+<code>master</code> branch (requires GTK+ 2.0 development libraries).  Run
+<code>cd src &amp;&amp; make</code> to build <code>dmost</code>, or
+<code>make test</code> to run the headless rules-engine and AI test suites; a
+man page is provided in <code>src/dmost.6</code>.
+</ul>
+
 <p>Here is an openscad file which defines some 3-d printable game pieces.
 <ul><li><a href="dueling-masters-of-space-time-game-pieces.scad">dueling-masters-of-space-time-game-pieces.scad</a>.  (For the asteroids, just go outside and find 14 little stones about 2cm in diameter.)
 </ul>
@@ -324,7 +364,7 @@ here are printable pieces which can be cut out and
 pasted onto U.S. nickels or other appropriately sized coins.
 Print it twice for a full set.
 
-<p><font size=-1>(c) Copyright Stephen M. Cameron, 2004, 2012.</font>
+<p><font size=-1>(c) Copyright Stephen M. Cameron, 2004, 2012, 2026.</font>
 <p>(The space images are public domain from NASA.)
 </body>
 </html>
