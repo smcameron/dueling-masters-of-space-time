@@ -23,6 +23,9 @@ sdl_font.o:	sdl_font.c sdl_font.h
 sdl_gfx.o:	sdl_gfx.c sdl_gfx.h
 	gcc -c ${ENGINE_CFLAGS} ${SDL_CFLAGS} sdl_gfx.c
 
+sdl_ui.o:	sdl_ui.c sdl_ui.h sdl_font.h sdl_gfx.h
+	gcc -c ${ENGINE_CFLAGS} ${SDL_CFLAGS} sdl_ui.c
+
 test_game:	test_game.c game.o game.h
 	gcc -o test_game ${ENGINE_CFLAGS} test_game.c game.o
 
@@ -36,6 +39,6 @@ test:	test_game test_ai
 	./test_ai
 
 clean:
-	rm -f dmost test_game test_ai game.o ai.o sdl_font.o sdl_gfx.o
+	rm -f dmost test_game test_ai game.o ai.o sdl_font.o sdl_gfx.o sdl_ui.o
 
 
